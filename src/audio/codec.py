@@ -33,24 +33,41 @@ def pcm16_to_alaw(pcm_bytes: bytes) -> bytes:
 
 
 def resample_8k_to_16k(pcm_8k: bytes) -> bytes:
-    """Resample 8kHz PCM16 to 16kHz PCM16. Simple sample doubling (fast, good enough for speech)."""
-    import struct
-    samples = struct.unpack(f"<{len(pcm_8k)//2}h", pcm_8k)
-    out = []
-    for s in samples:
-        out.append(s)
-        out.append(s)  # Duplicate each sample for 2x upsample
-    return struct.pack(f"<{len(out)}h", *out)
+    """Stateless 8kHz->16kHz PCM16 resample.
 
-
-_ratecv_state_down = None
+    Prefer :class:`Resampler` for streaming audio — a stateless call resets the
+    filter on every chunk and introduces an audible boundary click. This helper
+    exists for one-shot conversions and tests only.
+    """
+    result, _ = audioop.ratecv(pcm_8k, 2, 1, 8000, 16000, None)
+    return result
 
 
 def resample_16k_to_8k(pcm_16k: bytes) -> bytes:
-    """Resample 16kHz PCM16 to 8kHz PCM16."""
-    global _ratecv_state_down
-    result, _ratecv_state_down = audioop.ratecv(pcm_16k, 2, 1, 16000, 8000, _ratecv_state_down)
+    """Stateless 16kHz->8kHz PCM16 resample. See :class:`Resampler` for streams."""
+    result, _ = audioop.ratecv(pcm_16k, 2, 1, 16000, 8000, None)
     return result
+
+
+class Resampler:
+    """Per-call stateful resampler.
+
+    ``audioop.ratecv`` carries filter state between chunks; sharing that state
+    across calls (a module global) corrupts concurrent calls and clicks at chunk
+    boundaries. Each call owns one instance so its up/down state is isolated.
+    """
+
+    def __init__(self) -> None:
+        self._up_state = None
+        self._down_state = None
+
+    def up_8k_to_16k(self, pcm_8k: bytes) -> bytes:
+        out, self._up_state = audioop.ratecv(pcm_8k, 2, 1, 8000, 16000, self._up_state)
+        return out
+
+    def down_16k_to_8k(self, pcm_16k: bytes) -> bytes:
+        out, self._down_state = audioop.ratecv(pcm_16k, 2, 1, 16000, 8000, self._down_state)
+        return out
 
 
 def b64_decode(data: str) -> bytes:

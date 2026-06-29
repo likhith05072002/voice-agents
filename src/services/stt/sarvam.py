@@ -38,7 +38,7 @@ class VADEvent:
 class SarvamSTTClient:
     """Streaming Speech-to-Text via Sarvam Saaras V3 WebSocket."""
 
-    def __init__(self, api_key: str, model: str = "saaras:v3"):
+    def __init__(self, api_key: str, model: str = "saaras:v3", buffer_ms: int = 100):
         self.api_key = api_key
         self.model = model
         self._ws = None
@@ -48,6 +48,9 @@ class SarvamSTTClient:
         self._language = "te-IN"
         self._sample_rate = "16000"
         self._audio_buffer = b""
+        # Bytes to accumulate before sending: 16kHz * 2 bytes/sample * (ms/1000).
+        # Smaller buffer -> faster VAD/barge-in signals, more websocket traffic.
+        self._buffer_bytes = max(1, int(16000 * 2 * buffer_ms / 1000))
 
     async def connect(self, language: str = "te-IN", sample_rate: int = 16000) -> None:
         self._language = language
@@ -65,15 +68,15 @@ class SarvamSTTClient:
         logger.info("stt.connected", language=language, model=self.model)
 
     async def send_audio(self, pcm_bytes: bytes, sample_rate: int = 16000) -> None:
-        """Send PCM16 audio to STT. Buffers into ~100ms blocks for fast VAD response."""
+        """Send PCM16 audio to STT. Buffers small chunks into ~500ms blocks for reliability."""
         if not self._ws:
             return
 
         self._audio_buffer += pcm_bytes
 
-        # 100ms buffer (16000 Hz * 2 bytes * 0.1s = 3200 bytes)
-        # Smaller than the old 500ms — critical for fast barge-in detection
-        if len(self._audio_buffer) < 3200:
+        # Buffer until we have ~buffer_ms of audio so Sarvam gets meaningful
+        # chunks without delaying VAD/barge-in signals more than necessary.
+        if len(self._audio_buffer) < self._buffer_bytes:
             return
 
         chunk = self._audio_buffer

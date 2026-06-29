@@ -71,14 +71,25 @@ class SarvamTTSClient:
         return await self._audio_queue.get()
 
     async def _receive_loop(self) -> None:
+        """Persistent receive loop — survives across multiple utterances.
+
+        Each completed synthesis emits a single ``None`` sentinel onto the audio
+        queue (one per ``flush``). The loop does NOT exit on idle: it keepalive-
+        pings instead, so the connection can be reused for the whole call. This
+        is the fix for the documented "receive loop ended after first response"
+        reuse bug.
+        """
         try:
             while True:
                 try:
-                    raw = await asyncio.wait_for(self._ws.recv(), timeout=5.0)
+                    raw = await asyncio.wait_for(self._ws.recv(), timeout=20.0)
                 except asyncio.TimeoutError:
-                    # No more audio coming — signal completion
-                    await self._audio_queue.put(None)
-                    break
+                    # Idle between utterances — keep the socket warm, don't quit.
+                    try:
+                        await self._ws.send(json.dumps({"type": "ping"}))
+                    except Exception:
+                        break
+                    continue
 
                 msg = json.loads(raw)
                 msg_type = msg.get("type")
@@ -96,9 +107,10 @@ class SarvamTTSClient:
                     await self._audio_queue.put(audio_bytes)
 
                 elif msg_type == "event":
-                    event_type = msg.get("data", {}).get("event_type")
-                    if event_type == "final":
-                        await self._audio_queue.put(None)
+                    # Any completion event ends the current utterance. Treat all
+                    # event types as terminal so a single missed "final" label
+                    # can't hang the consumer.
+                    await self._audio_queue.put(None)
 
                 elif msg_type == "error":
                     logger.error("tts.error", msg=msg.get("data", {}).get("message"))
@@ -109,6 +121,7 @@ class SarvamTTSClient:
         except Exception as e:
             logger.error("tts.receive_error", error=str(e))
         finally:
+            # Unblock any consumer waiting on a permanently-closed connection.
             await self._audio_queue.put(None)
 
     async def close(self) -> None:

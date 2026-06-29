@@ -1,7 +1,7 @@
 [project]
 name = "voice-agent"
 version = "0.1.0"
-description = "India-first Voice AI SaaS for hospitals and clinics"
+description = "India-first multilingual voice AI agent for telephony"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
@@ -13,6 +13,9 @@ dependencies = [
     "numpy>=1.26",
     "structlog>=24.0",
     "python-dotenv>=1.0",
+    "pynacl>=1.5",
+    # audioop was removed from the stdlib in Python 3.13; this backport restores it.
+    "audioop-lts>=0.2; python_version >= '3.13'",
 ]
 
 [project.optional-dependencies]
@@ -22,5 +25,12 @@ dev = [
 ]
 
 [build-system]
-requires = ["setuptools>=75.0"]
-build-backend = "setuptools.backends._legacy:_Backend"
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
