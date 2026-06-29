@@ -65,15 +65,15 @@ class SarvamSTTClient:
         logger.info("stt.connected", language=language, model=self.model)
 
     async def send_audio(self, pcm_bytes: bytes, sample_rate: int = 16000) -> None:
-        """Send PCM16 audio to STT. Buffers small chunks into ~500ms blocks for reliability."""
+        """Send PCM16 audio to STT. Buffers into ~100ms blocks for fast VAD response."""
         if not self._ws:
             return
 
         self._audio_buffer += pcm_bytes
 
-        # Buffer until we have ~500ms of audio (16000 samples/sec * 2 bytes * 0.5s = 16000 bytes)
-        # This ensures Sarvam gets meaningful audio chunks
-        if len(self._audio_buffer) < 16000:
+        # 100ms buffer (16000 Hz * 2 bytes * 0.1s = 3200 bytes)
+        # Smaller than the old 500ms — critical for fast barge-in detection
+        if len(self._audio_buffer) < 3200:
             return
 
         chunk = self._audio_buffer
