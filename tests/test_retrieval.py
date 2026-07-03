@@ -56,7 +56,30 @@ def test_rare_word_outweighs_common_word():
 
 
 def test_tokenizer_handles_native_script():
-    assert _tokens("బంగారం ధర") == ["బంగారం", "ధర"]
+    # Indic tokens also emit a ~prefix pseudo-token (light stemming for
+    # case endings); short tokens don't.
+    assert _tokens("బంగారం ధర") == ["బంగారం", "~బంగా", "ధర"]
+
+
+def test_indic_normalization_unifies_spelling_variants():
+    # abbreviation dots and anusvara/chandrabindu variants must match
+    assert set(_tokens("एच.आर.")) & set(_tokens("एचआर"))
+    assert set(_tokens("सेवाएँ")) & set(_tokens("सेवाएं"))
+
+
+def test_multilingual_variants_retrieved_in_caller_language():
+    docs = ["Products: CocolevioHR, a recruitment automation product.",
+            "Cocolevio is based in Austin, Texas."]
+    translations = {"hi-IN": [
+        "उत्पाद: कोकोलिवियोएचआर, एक भर्ती स्वचालन उत्पाद।",
+        "कोकोलिवियो ऑस्टिन, टेक्सास में स्थित है।"]}
+    kb = KnowledgeBase(docs, translations=translations)
+    # Hindi query matches the Hindi variant and returns IT (caller language)
+    out = kb.retrieve("क्या आपके पास भर्ती स्वचालन उत्पाद है?")
+    assert out and "भर्ती" in out[0]
+    # English still returns the original
+    out = kb.retrieve("do you have a recruitment product?")
+    assert out and out[0].startswith("Products:")
 
 
 def test_cross_script_query_falls_back_to_whole_kb():

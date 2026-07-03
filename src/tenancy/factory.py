@@ -13,6 +13,7 @@ from src.pipeline.eagerness import resolve as resolve_eagerness, EagernessProfil
 from src.agent.demo_tools import build_demo_registry
 from src.agent.catalog import build_tools
 from src.agent.retrieval import build_demo_kb, KnowledgeBase
+from src.agent.kb_i18n import load_cached
 from src.tenancy.agents import AgentConfig
 
 
@@ -28,7 +29,11 @@ def _knowledge_for(agent: AgentConfig):
     if not agent.enable_rag:
         return None
     if agent.knowledge_docs:                  # inline per-business knowledge
-        return KnowledgeBase(agent.knowledge_docs)
+        # Cached machine translations (warmed in the background at startup)
+        # make retrieval language-agnostic — a Hindi caller token-matches the
+        # Hindi variant of an English doc. Cache misses are skipped silently.
+        return KnowledgeBase(agent.knowledge_docs,
+                             translations=load_cached(agent.knowledge_docs))
     return build_demo_kb()                     # back-compat
 
 

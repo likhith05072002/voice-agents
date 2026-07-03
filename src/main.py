@@ -44,6 +44,7 @@ from src.telephony.telnyx import TelnyxClient
 from src.telephony.batch import BatchDialer
 from src.integrations.webhooks import post_event
 from src.agent.transfer import attach_transfer_tool
+from src.agent import kb_i18n
 from src.testing.scenario import load_scenario, list_scenarios
 from src.testing.runner import TestRun
 
@@ -55,7 +56,21 @@ async def lifespan(app: FastAPI):
     # Load persisted agents into the live store on boot.
     n = await _agent_manager.hydrate()
     logger.info("agents.hydrated", count=n, total=len(_agent_store))
+
+    # Warm multilingual KB translations for every agent in the background —
+    # content-hash cached, so only new/changed docs ever hit the translate API.
+    async def _warm_kbs():
+        for a in _agent_store.all():
+            if a.knowledge_docs:
+                try:
+                    await kb_i18n.warm(a.knowledge_docs,
+                                       api_key=settings.sarvam_api_key)
+                except Exception as e:  # noqa: BLE001 — warm is best-effort
+                    logger.warning("kb_i18n.warm_failed", agent=a.agent_id,
+                                   error=str(e))
+    warm_task = asyncio.create_task(_warm_kbs())
     yield
+    warm_task.cancel()
 
 
 app = FastAPI(title="Voice Agent", version="0.8.0", lifespan=lifespan)
@@ -122,6 +137,14 @@ async def get_agent(agent_id: str, request: Request):
     return a.to_dict()
 
 
+def _warm_agent_kb(agent: AgentConfig) -> None:
+    """Fire-and-forget translation warm for one agent's docs (content-hash
+    cached, so an unchanged doc costs nothing)."""
+    if agent is not None and agent.knowledge_docs:
+        asyncio.ensure_future(
+            kb_i18n.warm(agent.knowledge_docs, api_key=settings.sarvam_api_key))
+
+
 @app.post("/agents")
 async def create_agent(request: Request):
     if (err := _check_admin(request)) is not None:
@@ -134,6 +157,7 @@ async def create_agent(request: Request):
         await _agent_manager.create(agent)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=409)
+    _warm_agent_kb(agent)
     return JSONResponse(agent.to_dict(), status_code=201)
 
 
@@ -147,7 +171,9 @@ async def update_agent(agent_id: str, request: Request):
     body = await request.json()
     merged = {**existing.to_dict(), **body, "agent_id": agent_id}   # id is immutable
     await _agent_manager.update(AgentConfig.from_dict(merged))
-    return _agent_manager.get(agent_id).to_dict()
+    updated = _agent_manager.get(agent_id)
+    _warm_agent_kb(updated)
+    return updated.to_dict()
 
 
 @app.delete("/agents/{agent_id}")
