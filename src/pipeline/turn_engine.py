@@ -40,6 +40,12 @@ import structlog
 from src.services.stt.sarvam import TranscriptEvent, VADEvent
 from src.services.llm.sarvam import SentenceEvent
 from src.pipeline.barge_in import classify, Verdict, BACKCHANNELS, HARD_INTERRUPT
+from src.observability.metrics import TurnLatency
+from src.pipeline.endpointing import looks_incomplete
+from src.agent.runner import resolve_tools
+from src.safety.guard import is_injection, guard_sentence, DEFAULT_REFUSAL
+from src.safety.moderation import moderate, is_blocked
+from src.pipeline.history import select_context, prune
 
 logger = structlog.get_logger()
 
@@ -80,7 +86,25 @@ class TurnEngine:
         frame_pace_s: float = FRAME_PACE_S,
         min_words: int = 2,
         false_timeout_s: float = 1.2,
+        speech_end_grace_s: float = 0.3,
         enable_recovery: bool = True,
+        instant_pause: bool = True,
+        enable_smart_endpointing: bool = False,
+        continuation_timeout_s: float = 0.6,
+        tools=None,
+        greeting_audio: bytes | None = None,
+        enable_safety: bool = True,
+        enable_idle: bool = False,
+        idle_reprompt_s: float = 10.0,
+        idle_hangup_s: float = 30.0,
+        reprompt_text: str = "",
+        enable_language_switch: bool = False,
+        knowledge=None,
+        router=None,
+        on_transcript=None,
+        on_metrics=None,
+        on_false_recovery=None,
+        turn_bucket=None,
         backchannels=BACKCHANNELS,
         hard_phrases=HARD_INTERRUPT,
     ) -> None:
@@ -97,9 +121,50 @@ class TurnEngine:
         # guard-stack tunables
         self.min_words = min_words
         self.false_timeout_s = false_timeout_s
+        self.speech_end_grace_s = speech_end_grace_s
         self.enable_recovery = enable_recovery
+        # Pause playback the instant VAD fires (pre-transcript). Superb when the
+        # audio path is echo-free (web/loopback: 129ms stops), but on PSTN legs
+        # with strong uncancelled line echo, false pauses read as "answer done"
+        # and get the agent legitimately interrupted mid-answer — measured to
+        # truncate EVERY answer on echo-heavy calls. Off -> interrupts confirm
+        # via transcript only.
+        self.instant_pause = instant_pause
+        self.enable_smart_endpointing = enable_smart_endpointing
+        self.continuation_timeout_s = continuation_timeout_s
+        self.tools = tools                       # ToolRegistry | None
+        self.greeting_audio = greeting_audio     # pre-rendered PCM16-8k (instant hello)
+        self.enable_safety = enable_safety
+        self.enable_idle = enable_idle
+        self.idle_reprompt_s = idle_reprompt_s
+        self.idle_hangup_s = idle_hangup_s
+        self.reprompt_text = reprompt_text
+        self.enable_language_switch = enable_language_switch
+        self._caller_language = ""
+        self.knowledge = knowledge               # KnowledgeBase | None (RAG)
+        self.router = router                     # AgentRouter | None (handoff)
+        self.on_transcript = on_transcript       # Callable[[str, str], None] | None
+        self.on_metrics = on_metrics             # Callable[[dict], None] | None
+        self.on_false_recovery = on_false_recovery  # candidate was echo/noise
+        self.turn_bucket = turn_bucket           # TokenBucket | None (rate limit)
         self.backchannels = backchannels
         self.hard_phrases = hard_phrases
+
+        # Smart-endpointing merge buffer (only used when enabled).
+        self._pending_user_text = ""
+        self._continuation_timer: asyncio.Task | None = None
+
+        # Idle/silence tracking.
+        self._last_activity = 0.0
+        self._reprompted = False
+
+        # Deferred post-turn action (e.g. a call transfer scheduled by a tool):
+        # runs only AFTER the turn's audio has fully played, so the caller hears
+        # the confirmation ("connecting you now") before the action fires.
+        self._deferred_action = None
+
+        # Whether the caller is audibly speaking right now (local VAD).
+        self._caller_speaking = False
 
         self.state = State.LISTENING
         self.history: list[dict] = []
@@ -121,6 +186,11 @@ class TurnEngine:
         # Text actually PLAYED (pump-maintained) for the in-flight turn.
         self._spoken = ""
 
+        # Latency instrumentation (see src/observability/metrics.py).
+        self._turn_seq = 0
+        self._last_speech_end: float | None = None
+        self._turn_metrics: TurnLatency | None = None
+
     # ─── lifecycle ───
 
     async def run(self) -> None:
@@ -137,35 +207,68 @@ class TurnEngine:
                     pass
             if self._candidate_timer:
                 self._candidate_timer.cancel()
+            self._cancel_continuation()
             if self._pump_task:
                 self._pump_task.cancel()
 
     async def _event_loop(self) -> None:
+        loop = asyncio.get_event_loop()
+        self._last_activity = loop.time()
         while True:
-            evt = await self.stt.get_event()
+            if self.enable_idle:
+                # Poll so a silent caller can be re-prompted / hung up on.
+                tick = max(0.02, min(1.0, self.idle_reprompt_s or self.idle_hangup_s))
+                try:
+                    evt = await asyncio.wait_for(self.stt.get_event(), timeout=tick)
+                except asyncio.TimeoutError:
+                    if self._idle_tick(loop):
+                        break          # idle hangup -> end the call
+                    continue
+            else:
+                evt = await self.stt.get_event()
             if evt is None:
                 break
+            self._last_activity = loop.time()
+            self._reprompted = False
 
             if isinstance(evt, VADEvent):
-                # Caller speech onset while we hold the floor -> pause and judge.
-                if evt.is_speech_start and self.state == State.SPEAKING and not self._candidate:
-                    self._begin_candidate()
+                if evt.is_speech_start:
+                    self._caller_speaking = True
+                    # Caller speech onset while we hold the floor -> pause and judge.
+                    if (self.instant_pause and self.state == State.SPEAKING
+                            and not self._candidate):
+                        self._begin_candidate()
+                        # True code-side reaction: VAD injected -> pump gated.
+                        delta_ms = (time.perf_counter() - evt.timestamp) * 1000
+                        if 0 <= delta_ms < 10_000:      # fakes pass timestamp=0
+                            logger.info("barge_in.reaction", ms=round(delta_ms, 2))
+                else:
+                    # END_SPEECH: caller stopped -> anchor for STT-endpoint latency.
+                    self._caller_speaking = False
+                    self._last_speech_end = evt.timestamp
+                    # If we're mid-judgement and the caller's blip already ended
+                    # with no transcript, it's most likely noise/backchannel —
+                    # resume fast instead of sitting silent for false_timeout.
+                    if self._candidate:
+                        self._on_candidate_speech_end()
 
             elif isinstance(evt, TranscriptEvent):
                 txt = evt.text.strip()
                 if not txt:
                     continue
+                if evt.language:
+                    self._caller_language = evt.language   # track for TTS switching
+                logger.info("stt.transcript", state=self.state.value,
+                            lang=evt.language,
+                            text=txt[:80].encode("ascii", "replace").decode())
                 if self._candidate:
                     await self._resolve_candidate(txt)
                 elif self.state in (State.SPEAKING, State.THINKING):
-                    # Transcript without a pending candidate (race, or THINKING):
-                    # judge directly; only act if it's a genuine interruption.
                     verdict = self._classify(txt)
                     if verdict in (Verdict.HARD, Verdict.REAL):
                         await self._confirm_interrupt(txt)
-                    # backchannel/short while speaking -> ignore, keep talking
                 else:
-                    self._start_turn(txt)
+                    self._on_user_final(txt)
 
     # ─── candidate interruption (pause -> judge -> resume or confirm) ───
 
@@ -180,13 +283,59 @@ class TurnEngine:
             self._candidate_timer = asyncio.create_task(self._candidate_timeout())
 
     async def _candidate_timeout(self) -> None:
-        """False-interruption recovery: VAD fired but no real words arrived."""
+        """False-interruption recovery: VAD fired but no real words arrived.
+
+        NEVER resumes while the caller is still audibly speaking — a long
+        interruption ("Sorry to cut you off, what time does…") outlives the
+        timeout, and resuming mid-sentence makes the agent talk over the caller
+        (heard as a stutter on real test calls). While speech continues we
+        re-arm; a transcript or END_SPEECH+grace decides the outcome."""
+        for cycle in range(4):                # bounded: a lost END can't pause forever
+            try:
+                await asyncio.sleep(self.false_timeout_s)
+            except asyncio.CancelledError:
+                return
+            if not self._candidate:
+                return
+            if self._caller_speaking and cycle < 3:
+                continue                      # still talking — keep waiting
+            logger.info("barge_in.recovered", reason="no_transcript")
+            self._notify_false_recovery()
+            self._resume_playback()
+            return
+
+    def _notify_false_recovery(self) -> None:
+        """A candidate died with no words — likely our own echo; let the audio
+        layer recalibrate so it stops fooling us."""
+        if self.on_false_recovery is not None:
+            try:
+                self.on_false_recovery()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _on_candidate_speech_end(self) -> None:
+        """Caller's speech ended while we're still judging and no transcript has
+        landed yet. Swap the long false_timeout for a brief grace: a real (but
+        slightly late) transcript still re-interrupts via the SPEAKING-state
+        path, while pure noise resumes in ~grace instead of ~false_timeout.
+        This is the main anti-stutter lever — without it every cough or breath
+        muted the agent for the full false_timeout."""
+        if not (self._candidate and self.enable_recovery):
+            return
+        if self.speech_end_grace_s >= self.false_timeout_s:
+            return  # grace wouldn't help; let the original timer run
+        if self._candidate_timer:
+            self._candidate_timer.cancel()
+        self._candidate_timer = asyncio.create_task(self._candidate_grace())
+
+    async def _candidate_grace(self) -> None:
         try:
-            await asyncio.sleep(self.false_timeout_s)
+            await asyncio.sleep(self.speech_end_grace_s)
         except asyncio.CancelledError:
             return
         if self._candidate:
-            logger.info("barge_in.recovered", reason="no_transcript")
+            logger.info("barge_in.recovered", reason="speech_ended_no_transcript")
+            self._notify_false_recovery()
             self._resume_playback()
 
     async def _resolve_candidate(self, transcript: str) -> None:
@@ -223,6 +372,98 @@ class TurnEngine:
     def _start_turn(self, transcript: str) -> None:
         self._current_turn = asyncio.create_task(self._do_turn(transcript))
 
+    def _emit_transcript(self, role: str, text: str) -> None:
+        """Push a finalized turn to the optional real-time transcript sink."""
+        if self.on_transcript is not None and text:
+            try:
+                self.on_transcript(role, text)
+            except Exception as e:  # noqa: BLE001 — a bad sink must not break the call
+                logger.warning("transcript_sink_error", error=str(e))
+
+    def _publish_metrics(self, tl: TurnLatency) -> None:
+        """Emit the turn's latency breakdown to the log and the metrics sink.
+        Idempotent per turn: the pump publishes at FIRST frame out (the moment
+        perceived latency is fully known), so an interrupt or mid-turn hangup
+        can no longer lose the measurement; the turn-end call is then a no-op."""
+        if tl.emitted:
+            return
+        b = tl.emit()
+        if self.on_metrics is not None and b:
+            try:
+                self.on_metrics(b)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("metrics_sink_error", error=str(e))
+
+    # ─── idle / silence handling ───
+
+    def _idle_tick(self, loop) -> bool:
+        """Called when no STT event arrived this poll. Returns True to hang up.
+        Only counts as idle while we're actually waiting on the caller."""
+        if self.state != State.LISTENING or self._candidate or self._pending_user_text:
+            self._last_activity = loop.time()        # busy -> not idle
+            return False
+        idle = loop.time() - self._last_activity
+        if idle >= self.idle_hangup_s:
+            logger.info("session.idle_hangup", idle_s=round(idle))
+            return True
+        if self.reprompt_text and not self._reprompted and idle >= self.idle_reprompt_s:
+            self._reprompted = True
+            logger.info("session.idle_reprompt")
+            self._current_turn = asyncio.create_task(self._do_canned(self.reprompt_text))
+        return False
+
+    async def _do_canned(self, text: str) -> None:
+        """Speak a fixed line (greeting re-prompt) as an interruptible turn."""
+        self._spoken = ""
+        self.state = State.SPEAKING
+        await self._speak(text)
+        await self._finish_playback()
+        self._spoken = ""
+        self.state = State.LISTENING
+
+    # ─── smart endpointing (opt-in fragment merge) ───
+
+    def _on_user_final(self, txt: str) -> None:
+        """Decide whether a final transcript starts a turn now, or is an
+        unfinished fragment we should hold briefly and merge with the next one.
+        No-op passthrough when smart endpointing is disabled."""
+        if not self.enable_smart_endpointing:
+            self._start_turn(txt)
+            return
+        merged = f"{self._pending_user_text} {txt}".strip() if self._pending_user_text else txt
+        if looks_incomplete(merged):
+            self._pending_user_text = merged
+            logger.info("endpoint.hold", text=merged[:60].encode("ascii", "replace").decode())
+            self._arm_continuation()
+        else:
+            self._pending_user_text = ""
+            self._cancel_continuation()
+            self._start_turn(merged)
+
+    def _arm_continuation(self) -> None:
+        self._cancel_continuation()
+        self._continuation_timer = asyncio.create_task(self._continuation_timeout())
+
+    def _cancel_continuation(self) -> None:
+        if self._continuation_timer:
+            self._continuation_timer.cancel()
+            self._continuation_timer = None
+
+    async def _continuation_timeout(self) -> None:
+        """The caller didn't continue in time — fire the buffered fragment so we
+        never drop input, even if the completeness guess was wrong."""
+        try:
+            await asyncio.sleep(self.continuation_timeout_s)
+        except asyncio.CancelledError:
+            return
+        txt = self._pending_user_text
+        self._pending_user_text = ""
+        self._continuation_timer = None
+        if txt:
+            logger.info("endpoint.fire_on_timeout",
+                        text=txt[:60].encode("ascii", "replace").decode())
+            self._start_turn(txt)
+
     async def _confirm_interrupt(self, next_transcript: str) -> None:
         """The single, centralised interrupt — same four steps, every time."""
         self._candidate = False
@@ -231,14 +472,19 @@ class TurnEngine:
         if turn and not turn.done():
             turn.cancel()                       # 2. unwind the TTS producer
             try:
-                await turn
-            except asyncio.CancelledError:
+                # Bounded: wait_for re-cancels on timeout, so a swallowed first
+                # cancellation cannot leave the old turn speaking forever.
+                await asyncio.wait_for(turn, timeout=1.5)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
                 pass
         await asyncio.sleep(0)                   # let the pump settle
         self._flush_playback()                  # 3. drop queued audio (critical!)
         if self._spoken.strip():                # 4. keep only what was heard
             self.history.append({"role": "assistant", "content": self._spoken})
         self._spoken = ""
+        if self._turn_metrics is not None:       # keep whatever stages completed
+            self._publish_metrics(self._turn_metrics)
+            self._turn_metrics = None
         self._pump_gate.set()                    # ready to play the next turn
         self.state = State.LISTENING
         self._start_turn(next_transcript)        # the interrupting words are the new turn
@@ -254,25 +500,86 @@ class TurnEngine:
 
     async def _do_greeting(self) -> None:
         self._spoken = ""
+        self._turn_seq += 1
+        tl = TurnLatency(turn_id=self._turn_seq, kind="greeting")
+        tl.mark("turn_start")
+        tl.mark("llm_first_token")   # greeting text is static — no LLM stage
+        self._turn_metrics = tl
         self.state = State.SPEAKING
-        await self._speak(self.greeting_text)
+        if self.greeting_audio:
+            # Pre-rendered greeting: the caller hears "hello" instantly instead
+            # of paying cold TTS synthesis (~3.5s measured on a real call).
+            tl.mark("tts_first_audio")
+            self._emit_transcript("assistant", self.greeting_text)
+            for frame in self._to_frames(self.greeting_audio):
+                await self._playback_queue.put(frame)
+            await self._playback_queue.put(_SpokenMark(self.greeting_text))
+        else:
+            await self._speak(self.greeting_text)
         await self._finish_playback()
+        self._publish_metrics(tl)
+        if self._turn_metrics is tl:
+            self._turn_metrics = None
         self._spoken = ""
         self.state = State.LISTENING
 
-    async def _do_turn(self, transcript: str) -> None:
-        self.state = State.THINKING
-        self._spoken = ""
-        self.history.append({"role": "user", "content": transcript})
-        messages = [{"role": "system", "content": self.system_prompt}] + self.history[-10:]
+    def defer_after_turn(self, action) -> None:
+        """Schedule an async callable to run once the current turn's audio has
+        fully played (used by tools like call transfer)."""
+        self._deferred_action = action
 
-        if self.enable_fillers and self.filler is not None:
-            self.state = State.SPEAKING
-            for frame in self._to_frames(self.filler.select(transcript)):
-                await self._playback_queue.put(frame)
+    async def _run_deferred_action(self) -> None:
+        if self._deferred_action is None:
+            return
+        action, self._deferred_action = self._deferred_action, None
+        try:
+            await action()
+        except Exception as e:  # noqa: BLE001 — a failed action must not kill the loop
+            logger.error("deferred_action_failed", error=str(e))
 
+    async def _maybe_switch_language(self) -> None:
+        """Reconnect TTS to the caller's language if it changed (no-op otherwise)."""
+        if (self.enable_language_switch and self._caller_language
+                and hasattr(self.tts, "ensure_language")):
+            try:
+                await self.tts.ensure_language(self._caller_language)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("tts.language_switch_failed", error=str(e))
+
+    def _guard(self, text: str, active_prompt: str) -> tuple[str, bool]:
+        """Safety-check a spoken chunk (prompt-leak + moderation). Returns
+        (text_to_speak, blocked)."""
+        if not self.enable_safety:
+            return text, False
+        guarded, blocked = guard_sentence(text, active_prompt)
+        if blocked:
+            return guarded, True
+        cats = moderate(text)
+        if is_blocked(cats):
+            return DEFAULT_REFUSAL, True
+        if cats:
+            logger.info("safety.flagged", categories=sorted(cats))
+        return text, False
+
+    async def _stream_answer(self, messages: list[dict], tl: TurnLatency,
+                             active_prompt: str) -> str:
+        """Stream the LLM answer into TTS/playback with PIPELINED synthesis.
+
+        Sentence N+1's text is sent to TTS while sentence N's audio is still
+        arriving/playing — synthesis (~0.6s) finishes well inside playback time
+        (~2-3s), so the caller hears one continuous answer. The serial version
+        waited out each sentence's full audio (plus a completion timeout)
+        before even STARTING the next synthesis, which put 1-3s of dead air
+        between sentences on live calls ("We are based in Austin, …… Texas.")."""
         sentence_queue: asyncio.Queue = asyncio.Queue()
+        tl.mark("turn_start")
         llm_task = asyncio.create_task(self.llm.generate_sentences(messages, sentence_queue))
+        # Overlap the TTS language switch with LLM generation (hidden under TTFT).
+        await self._maybe_switch_language()
+
+        pending: asyncio.Queue = asyncio.Queue()   # texts awaiting their audio
+        collector = asyncio.create_task(self._collect_tts_audio(pending))
+        await self.tts.reset()
         full = ""
         try:
             while True:
@@ -280,36 +587,195 @@ class TurnEngine:
                 if evt is None:
                     break
                 if isinstance(evt, SentenceEvent):
+                    tl.mark("llm_first_token")
+                    text, blocked = self._guard(evt.text, active_prompt)
+                    if blocked:
+                        logger.warning("safety.output_blocked")
+                        full = text
+                        await self._feed_tts(text, pending)
+                        self.llm.cancel()
+                        break
                     full += evt.text
-                    await self._speak(evt.text)
+                    await self._feed_tts(evt.text, pending)
+            await pending.put(None)                # no more sentences
+            await collector                        # wait for the audio to finish
+        except asyncio.CancelledError:
+            self.llm.cancel()
+            llm_task.cancel()
+            collector.cancel()
+            for t in (llm_task, collector):
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+            raise
         finally:
             if not llm_task.done():
                 self.llm.cancel()
             try:
                 await llm_task
-            except Exception:
+            except (asyncio.CancelledError, Exception):
                 pass
+            if not collector.done():
+                collector.cancel()
+                try:
+                    await collector
+                except (asyncio.CancelledError, Exception):
+                    pass
+        return full
+
+    async def _feed_tts(self, text: str, pending: asyncio.Queue) -> None:
+        """Send one sentence to TTS immediately (no waiting for prior audio)."""
+        self._emit_transcript("assistant", text)
+        await self.tts.send_text(text)
+        await self.tts.flush()
+        await pending.put(text)
+
+    async def _collect_tts_audio(self, pending: asyncio.Queue) -> None:
+        """Drain synthesized audio in order: for each pending sentence, queue
+        its frames and then its played-mark. Runs concurrently with feeding."""
+        while True:
+            text = await pending.get()
+            if text is None:
+                return
+            emitted = False
+            while True:
+                try:
+                    audio = await asyncio.wait_for(
+                        self.tts.get_audio(), timeout=2.0 if emitted else 10.0)
+                except asyncio.TimeoutError:
+                    if asyncio.current_task().cancelling():
+                        raise asyncio.CancelledError()
+                    logger.info("tts.completion_by_timeout", emitted=emitted)
+                    break
+                if audio is None:
+                    break
+                if self._turn_metrics is not None:
+                    self._turn_metrics.mark("tts_first_audio")
+                if self.state != State.SPEAKING:
+                    self.state = State.SPEAKING
+                for frame in self._to_frames(audio):
+                    await self._playback_queue.put(frame)
+                    emitted = True
+            if emitted:
+                await self._playback_queue.put(_SpokenMark(text))
+
+    async def _do_turn(self, transcript: str) -> None:
+        if self.turn_bucket is not None and not self.turn_bucket.allow(asyncio.get_event_loop().time()):
+            logger.warning("ratelimit.turn_dropped",
+                           text=transcript[:40].encode("ascii", "replace").decode())
+            self.state = State.LISTENING
+            return
+        self.state = State.THINKING
+        self._spoken = ""
+        self._turn_seq += 1
+        tl = TurnLatency(turn_id=self._turn_seq)
+        tl.user_speech_end = self._last_speech_end   # may be None (text-driven turn)
+        tl.mark("transcript_in")
+        self._last_speech_end = None
+        self._turn_metrics = tl
+        logger.info("turn.start", user_text=transcript[:80].encode("ascii", "replace").decode())
+        if self.enable_safety and is_injection(transcript):
+            logger.warning("safety.injection_flagged",
+                           text=transcript[:60].encode("ascii", "replace").decode())
+        self.history.append({"role": "user", "content": transcript})
+        self._emit_transcript("user", transcript)
+
+        # Multi-agent routing: pick the active persona/tools for this turn.
+        active_prompt = self.system_prompt
+        active_tools = self.tools
+        if self.router is not None:
+            agent = self.router.route(transcript)
+            active_prompt = agent.system_prompt or self.system_prompt
+            if agent.tools is not None:
+                active_tools = agent.tools
+            logger.info("agent.routed", agent=agent.name)
+
+        sys_content = active_prompt
+        if self.knowledge is not None:
+            snippets = self.knowledge.retrieve(transcript)
+            # ALWAYS ground the model in the first doc (company identity) PLUS
+            # whatever matched the question: garbled STT can miss retrieval and
+            # an ungrounded LLM invents fake companies (seen live: "VocalView").
+            if self.knowledge.docs:
+                identity = self.knowledge.docs[0]
+                snippets = [identity] + [s for s in snippets if s != identity][:2]
+            if snippets:
+                sys_content += ("\n\nFACTS (answer from these — never invent or "
+                                "contradict them):\n- " + "\n- ".join(snippets))
+                logger.info("rag.injected", n=len(snippets))
+        messages = [{"role": "system", "content": sys_content}] + select_context(self.history)
+
+        if self.enable_fillers and self.filler is not None:
+            self.state = State.SPEAKING
+            for frame in self._to_frames(self.filler.select(transcript)):
+                await self._playback_queue.put(frame)
+
+        # Tool/function-calling: the terminating completion IS the answer, so we
+        # speak it directly instead of making a SECOND (streaming) LLM call —
+        # eliminating a full round-trip per tool-enabled turn. TTS streams the
+        # audio, so first-audio latency is unchanged.
+        tool_answer = None
+        if active_tools is not None and len(active_tools):
+            tl.mark("turn_start")
+            messages, tool_answer = await resolve_tools(self.llm.complete, messages, active_tools)
+
+        if tool_answer:
+            await self._maybe_switch_language()
+            tl.mark("llm_first_token")
+            full, _blocked = self._guard(tool_answer, active_prompt)
+            if full.strip():
+                await self._speak(full)
+        else:
+            full = await self._stream_answer(messages, tl, active_prompt)
 
         await self._finish_playback()
-        # On a clean finish, played == generated. (On interrupt we never reach
-        # here; _confirm_interrupt commits the played portion instead.)
+        await self._run_deferred_action()   # e.g. transfer, after audio played
         if full.strip():
             self.history.append({"role": "assistant", "content": full})
+            logger.info("turn.done", assistant_text=full[:100].encode("ascii", "replace").decode())
+        self.history = prune(self.history)
+        self._publish_metrics(tl)
+        if self._turn_metrics is tl:
+            self._turn_metrics = None
         self._spoken = ""
         self.state = State.LISTENING
 
     # ─── audio ───
 
     async def _speak(self, text: str) -> None:
-        """Synthesize one chunk of text and stream its frames + a played-mark."""
+        """Synthesize one chunk of text and stream its frames + a played-mark.
+
+        Completion is detected by the provider's completion event OR by a
+        sustained gap after the last audio chunk. Live calls showed Sarvam's
+        completion event sometimes never arrives — without the gap fallback the
+        turn hung inside this loop forever and every answer was truncated by
+        the caller's next question."""
+        # Real-time transcript feed: emit each sentence as it heads to TTS so
+        # live viewers and the voice tester see the answer as it is spoken.
+        # (History still records only what actually PLAYED — different concern.)
+        self._emit_transcript("assistant", text)
         await self.tts.reset()
         await self.tts.send_text(text)
         await self.tts.flush()
         emitted = False
         while True:
-            audio = await self.tts.get_audio()
+            try:
+                # 10s for synthesis to start; 2s inter-chunk gap = done.
+                audio = await asyncio.wait_for(
+                    self.tts.get_audio(), timeout=2.0 if emitted else 10.0)
+            except asyncio.TimeoutError:
+                # wait_for can convert a concurrent task-cancellation into
+                # TimeoutError; swallowing it would UN-CANCEL the turn and let
+                # it keep speaking after a confirmed interrupt. Re-raise.
+                if asyncio.current_task().cancelling():
+                    raise asyncio.CancelledError()
+                logger.info("tts.completion_by_timeout", emitted=emitted)
+                break
             if audio is None:
                 break
+            if self._turn_metrics is not None:
+                self._turn_metrics.mark("tts_first_audio")
             if self.state != State.SPEAKING:
                 self.state = State.SPEAKING
             for frame in self._to_frames(audio):
@@ -339,19 +805,46 @@ class TurnEngine:
         Real-time pacing keeps un-played audio in OUR queue so an interrupt's
         flush silences the agent fast; the gate lets a candidate interruption
         pause instantly and resume if it turns out to be a backchannel.
+
+        Pacing chases an ABSOLUTE per-frame deadline (``loop.time() + N*pace``)
+        instead of sleeping ``frame_pace_s`` after every send. A fixed per-frame
+        sleep folds the send + scheduling overhead into audio drift, and on a
+        coarse-timer platform (Windows' ~15ms granularity) a 20ms frame paces at
+        ~31ms — 65% of real time — starving the carrier and making speech choppy.
+        Deadline-chasing self-corrects: when the clock runs coarse, frames whose
+        deadline already passed flush back-to-back to catch up, so the average
+        rate holds at real time everywhere. A long stall (>200ms, i.e. a barge-in
+        pause) re-anchors the clock so resume doesn't replay a sped-up burst.
         """
+        loop = asyncio.get_event_loop()
+        next_send: float | None = None
+        gate = self._pump_gate
         while True:
-            await self._pump_gate.wait()         # blocks while paused
+            if not gate.is_set():                # only await when actually paused
+                await gate.wait()
             item = await self._playback_queue.get()
             if item is _END:
                 self._turn_done.set()
+                next_send = None                 # reset the clock between turns
                 continue
             if isinstance(item, _SpokenMark):
                 self._spoken += item.text         # this text was actually heard
                 continue
+            if self.frame_pace_s:
+                now = loop.time()
+                if next_send is None or now - next_send > 0.2:
+                    next_send = now              # fresh turn or post-pause re-anchor
+                delay = next_send - now
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                next_send += self.frame_pace_s
+            if self._turn_metrics is not None:
+                tm = self._turn_metrics
+                tm.mark("first_frame_out")    # first audio the caller hears
+                if not tm.emitted:
+                    self._publish_metrics(tm)  # perceived_ms is known NOW
             try:
                 await self.send_media(item)
-            except Exception:
+            except Exception as e:
+                logger.warning("pump.send_failed", error=str(e))
                 break
-            if self.frame_pace_s:
-                await asyncio.sleep(self.frame_pace_s)

@@ -1,0 +1,84 @@
+"""Tests for language-aware TTS switching."""
+
+import asyncio
+
+from src.services.tts.sarvam import SarvamTTSClient
+from src.pipeline.turn_engine import TurnEngine
+from src.services.stt.sarvam import TranscriptEvent
+from src.services.llm.sarvam import SentenceEvent
+
+
+def test_needs_language_switch_logic():
+    c = SarvamTTSClient("k")
+    c._language = "te-IN"
+    assert c._needs_language_switch("hi-IN") is True
+    assert c._needs_language_switch("te-IN") is False
+    assert c._needs_language_switch("") is False
+
+
+class _STT:
+    def __init__(self): self.q = asyncio.Queue()
+    async def get_event(self): return await self.q.get()
+
+
+class _LLM:
+    async def generate_sentences(self, messages, queue):
+        await queue.put(SentenceEvent(text="ok. ", is_first=True, timestamp=0.0))
+        await queue.put(None)
+        return "ok. "
+    def cancel(self): ...
+
+
+class _LangTTS:
+    def __init__(self): self.langs = []; self._p = []
+    async def reset(self): self._p = []
+    async def send_text(self, t): self._p = [b"\x01\x00" * 160, None]
+    async def flush(self): ...
+    async def get_audio(self): return self._p.pop(0) if self._p else None
+    async def ensure_language(self, lang): self.langs.append(lang)
+
+
+async def test_engine_switches_tts_language_to_caller():
+    tts = _LangTTS()
+    sent = []
+    engine = TurnEngine(stt=_STT(), llm=_LLM(), tts=tts,
+                        send_media=lambda f: sent.append(f) or _noop(),
+                        system_prompt="s", greeting_text="", frame_pace_s=0,
+                        enable_language_switch=True)
+    run = asyncio.create_task(engine.run())
+    await engine.stt.q.put(TranscriptEvent(text="namaste", is_final=True,
+                                           language="hi-IN", timestamp=0.0))
+    await _wait(lambda: any(h["role"] == "assistant" for h in engine.history))
+    await engine.stt.q.put(None)
+    await asyncio.wait_for(run, timeout=4.0)
+    assert "hi-IN" in tts.langs
+
+
+async def test_no_switch_when_disabled():
+    tts = _LangTTS()
+    sent = []
+    engine = TurnEngine(stt=_STT(), llm=_LLM(), tts=tts,
+                        send_media=lambda f: sent.append(f) or _noop(),
+                        system_prompt="s", greeting_text="", frame_pace_s=0,
+                        enable_language_switch=False)
+    run = asyncio.create_task(engine.run())
+    await engine.stt.q.put(TranscriptEvent(text="namaste", is_final=True,
+                                           language="hi-IN", timestamp=0.0))
+    await _wait(lambda: any(h["role"] == "assistant" for h in engine.history))
+    await engine.stt.q.put(None)
+    await asyncio.wait_for(run, timeout=4.0)
+    assert tts.langs == []
+
+
+async def _noop():
+    return None
+
+
+async def _wait(pred, timeout=2.0):
+    loop = asyncio.get_event_loop()
+    end = loop.time() + timeout
+    while loop.time() < end:
+        if pred():
+            return True
+        await asyncio.sleep(0.005)
+    raise AssertionError("condition not met")

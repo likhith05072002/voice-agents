@@ -60,13 +60,17 @@ class FakeTTS:
     async def send_text(self, text):
         size = self._sizes[self._i] if self._i < len(self._sizes) else self._default
         self._i += 1
-        self._pending = [b"\x01\x00" * (size // 2), None]
+        # Append (like the real client's queue): with pipelined synthesis the
+        # engine sends sentence N+1 before consuming sentence N's audio.
+        self._pending += [b"\x01\x00" * (size // 2), None]
 
     async def flush(self):
         pass
 
     async def get_audio(self):
-        return self._pending.pop(0) if self._pending else None
+        while not self._pending:
+            await asyncio.sleep(0.005)      # audio "arrives" asynchronously
+        return self._pending.pop(0)
 
 
 def _engine(stt, llm, tts, sent, **kw):
@@ -184,6 +188,164 @@ async def test_false_interruption_recovers_after_timeout():
 
     await stt.q.put(None)
     await asyncio.wait_for(run, timeout=3.0)
+
+
+async def test_no_false_recovery_while_caller_still_speaking():
+    """A long interruption outlives false_timeout; the agent must NOT resume
+    talking over the caller (the mid-phrase stutter heard on real calls)."""
+    stt = FakeSTT()
+    llm = FakeLLM(["A long answer that keeps going. "])
+    tts = FakeTTS([64000])
+    sent = []
+    engine = _engine(stt, llm, tts, sent, frame_pace_s=0.005,
+                     false_timeout_s=0.05, speech_end_grace_s=0.05)
+
+    run = asyncio.create_task(engine.run())
+    await stt.q.put(TranscriptEvent(text="hi", is_final=True, language="en", timestamp=0.0))
+    assert await _wait_until(lambda: engine.state == State.SPEAKING)
+
+    # Caller starts talking and KEEPS talking (no END_SPEECH yet).
+    await stt.q.put(VADEvent(is_speech_start=True, timestamp=0.0))
+    assert await _wait_until(lambda: engine._candidate is True)
+    await asyncio.sleep(0.2)                     # several false_timeouts elapse
+    assert engine._candidate is True             # still paused — no stutter
+
+    # Caller stops -> END_SPEECH -> grace resumes as before.
+    await stt.q.put(VADEvent(is_speech_start=False, timestamp=0.0))
+    assert await _wait_until(lambda: engine._candidate is False, timeout=1.0)
+    assert engine.state == State.SPEAKING
+
+    await stt.q.put(None)
+    await asyncio.wait_for(run, timeout=4.0)
+
+
+async def test_speech_end_triggers_fast_recovery():
+    """A VAD blip (start then end, no transcript) must resume via the short
+    grace, NOT wait the full false_timeout. We set false_timeout absurdly long
+    so only the grace path can resume in time."""
+    stt = FakeSTT()
+    llm = FakeLLM(["A long answer that keeps going. "])
+    tts = FakeTTS([64000])
+    sent = []
+    engine = _engine(stt, llm, tts, sent, frame_pace_s=0.005,
+                     false_timeout_s=5.0, speech_end_grace_s=0.05)
+
+    run = asyncio.create_task(engine.run())
+    await stt.q.put(TranscriptEvent(text="hi", is_final=True, language="en", timestamp=0.0))
+    assert await _wait_until(lambda: engine.state == State.SPEAKING)
+
+    await stt.q.put(VADEvent(is_speech_start=True, timestamp=0.0))
+    assert await _wait_until(lambda: engine._candidate is True)
+    await stt.q.put(VADEvent(is_speech_start=False, timestamp=0.0))   # blip ended
+    # Resumes within the 50ms grace, far below the 5s false_timeout.
+    assert await _wait_until(lambda: engine._candidate is False, timeout=1.0)
+    assert engine.state == State.SPEAKING
+
+    await stt.q.put(None)
+    await asyncio.wait_for(run, timeout=4.0)
+
+
+async def test_real_interrupt_still_confirms_after_speech_end():
+    """Even with the fast-recovery path armed, a genuine transcript that lands
+    after END_SPEECH must still interrupt and truncate to what played."""
+    stt = FakeSTT()
+    llm = FakeLLM(["First. ", "Second sentence long. "])
+    tts = FakeTTS([320, 64000])
+    sent = []
+    # grace == false_timeout so neither timer pre-resumes; transcript decides.
+    engine = _engine(stt, llm, tts, sent, frame_pace_s=0.005,
+                     false_timeout_s=5.0, speech_end_grace_s=5.0)
+
+    run = asyncio.create_task(engine.run())
+    await stt.q.put(TranscriptEvent(text="hi", is_final=True, language="en", timestamp=0.0))
+    assert await _wait_until(lambda: engine._spoken == "First. ")
+
+    await stt.q.put(VADEvent(is_speech_start=True, timestamp=0.0))
+    assert await _wait_until(lambda: engine._candidate is True)
+    await stt.q.put(VADEvent(is_speech_start=False, timestamp=0.0))
+    await stt.q.put(TranscriptEvent(text="what about silver price",
+                                    is_final=True, language="en", timestamp=0.0))
+
+    assert await _wait_until(
+        lambda: any(h["role"] == "assistant" for h in engine.history))
+    assert engine.history[1] == {"role": "assistant", "content": "First. "}
+
+    await stt.q.put(None)
+    await asyncio.wait_for(run, timeout=4.0)
+
+
+async def test_smart_endpointing_merges_fragment_then_fires():
+    """A fragment ('...price for') is held, then merged with the continuation
+    ('twenty two carat gold') and the turn fires on the complete utterance."""
+    stt = FakeSTT()
+    llm = FakeLLM(["Sure. "])
+    tts = FakeTTS([320])
+    sent = []
+    engine = _engine(stt, llm, tts, sent, frame_pace_s=0,
+                     enable_smart_endpointing=True, continuation_timeout_s=2.0)
+
+    run = asyncio.create_task(engine.run())
+    await stt.q.put(TranscriptEvent(text="what is the price for",
+                                    is_final=True, language="en", timestamp=0.0))
+    # Held, not fired: no user turn yet.
+    assert await _wait_until(lambda: engine._pending_user_text != "")
+    assert not any(h["role"] == "user" for h in engine.history)
+    # Continuation completes it (ends on a content word, not a conjunction).
+    await stt.q.put(TranscriptEvent(text="twenty two carat gold",
+                                    is_final=True, language="en", timestamp=0.0))
+    assert await _wait_until(
+        lambda: any(h["role"] == "user" for h in engine.history))
+    user = next(h for h in engine.history if h["role"] == "user")
+    assert user["content"] == "what is the price for twenty two carat gold"
+
+    await stt.q.put(None)
+    await asyncio.wait_for(run, timeout=4.0)
+
+
+async def test_smart_endpointing_fires_on_timeout_when_no_continuation():
+    """If the caller never continues, the buffered fragment still fires after
+    the continuation timeout — input is never dropped."""
+    stt = FakeSTT()
+    llm = FakeLLM(["Ok. "])
+    tts = FakeTTS([320])
+    sent = []
+    engine = _engine(stt, llm, tts, sent, frame_pace_s=0,
+                     enable_smart_endpointing=True, continuation_timeout_s=0.05)
+
+    run = asyncio.create_task(engine.run())
+    await stt.q.put(TranscriptEvent(text="I want to know about",
+                                    is_final=True, language="en", timestamp=0.0))
+    # Fires the fragment after the 50ms timeout even with no continuation.
+    assert await _wait_until(
+        lambda: any(h["role"] == "user" for h in engine.history), timeout=1.0)
+    user = next(h for h in engine.history if h["role"] == "user")
+    assert user["content"] == "I want to know about"
+
+    await stt.q.put(None)
+    await asyncio.wait_for(run, timeout=4.0)
+
+
+async def test_idle_reprompts_then_hangs_up():
+    """A silent caller is re-prompted, then the call ends (engine.run returns)."""
+    stt, llm, tts, sent = FakeSTT(), FakeLLM(["x. "]), FakeTTS([160]), []
+    engine = _engine(stt, llm, tts, sent, frame_pace_s=0,
+                     enable_idle=True, idle_reprompt_s=0.05, idle_hangup_s=0.25,
+                     reprompt_text="still there?")
+    run = asyncio.create_task(engine.run())
+    # No events ever -> reprompt fires, then idle hangup ends the loop.
+    await asyncio.wait_for(run, timeout=3.0)
+    assert engine._reprompted is True
+    assert len(sent) > 0          # the re-prompt audio was actually played
+
+
+async def test_idle_disabled_does_not_hang_up():
+    stt, llm, tts, sent = FakeSTT(), FakeLLM(["x. "]), FakeTTS([160]), []
+    engine = _engine(stt, llm, tts, sent, frame_pace_s=0, enable_idle=False)
+    run = asyncio.create_task(engine.run())
+    # With idle off, run blocks until we close the stream.
+    assert not await _wait_until(lambda: run.done(), timeout=0.3)
+    await stt.q.put(None)
+    await asyncio.wait_for(run, timeout=2.0)
 
 
 async def test_hard_phrase_interrupts_immediately():

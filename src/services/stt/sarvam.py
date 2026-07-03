@@ -18,6 +18,8 @@ from dataclasses import dataclass
 import structlog
 import websockets
 
+from src.util.backoff import retry_async
+
 logger = structlog.get_logger()
 
 
@@ -38,9 +40,11 @@ class VADEvent:
 class SarvamSTTClient:
     """Streaming Speech-to-Text via Sarvam Saaras V3 WebSocket."""
 
-    def __init__(self, api_key: str, model: str = "saaras:v3", buffer_ms: int = 100):
+    def __init__(self, api_key: str, model: str = "saaras:v3", buffer_ms: int = 100,
+                 high_vad_sensitivity: bool = True):
         self.api_key = api_key
         self.model = model
+        self.high_vad_sensitivity = high_vad_sensitivity
         self._ws = None
         self._transcript_queue: asyncio.Queue[TranscriptEvent | VADEvent | None] = asyncio.Queue()
         self._receive_task = None
@@ -51,6 +55,7 @@ class SarvamSTTClient:
         # Bytes to accumulate before sending: 16kHz * 2 bytes/sample * (ms/1000).
         # Smaller buffer -> faster VAD/barge-in signals, more websocket traffic.
         self._buffer_bytes = max(1, int(16000 * 2 * buffer_ms / 1000))
+        self._seen_unhandled: set[str] = set()
 
     async def connect(self, language: str = "te-IN", sample_rate: int = 16000) -> None:
         self._language = language
@@ -58,11 +63,19 @@ class SarvamSTTClient:
         self._config_sent = False
         self._audio_buffer = b""
 
-        self._ws = await websockets.connect(
-            "wss://api.sarvam.ai/speech-to-text/ws",
-            additional_headers={"api-subscription-key": self.api_key},
-            ping_interval=20,
-            ping_timeout=10,
+        async def _open():
+            return await websockets.connect(
+                "wss://api.sarvam.ai/speech-to-text/ws",
+                additional_headers={"api-subscription-key": self.api_key},
+                ping_interval=20,
+                ping_timeout=10,
+            )
+
+        # Retry transient connect failures (DNS/TLS/cold LB) rather than failing
+        # the call on the first hiccup.
+        self._ws = await retry_async(
+            _open, attempts=3, base_delay=0.2,
+            on_retry=lambda a, e: logger.warning("stt.connect_retry", attempt=a, error=str(e)),
         )
         self._receive_task = asyncio.create_task(self._receive_loop())
         logger.info("stt.connected", language=language, model=self.model)
@@ -96,7 +109,7 @@ class SarvamSTTClient:
                     "language_code": self._language,
                     "sample_rate": self._sample_rate,
                     "vad_signals": True,
-                    "high_vad_sensitivity": True,
+                    "high_vad_sensitivity": self.high_vad_sensitivity,
                 },
                 "audio": audio_data,
             }
@@ -114,8 +127,58 @@ class SarvamSTTClient:
         if self._ws:
             await self._ws.send(json.dumps({"type": "flush_signal"}))
 
+    def inject_vad(self, is_speech_start: bool) -> None:
+        """Feed a locally-detected VAD event into the event stream. Live calls
+        showed Sarvam sends no START/END_SPEECH signals, so the engine's
+        instant-pause barge-in path never fired; a local energy detector in the
+        audio path injects these instead."""
+        self._transcript_queue.put_nowait(VADEvent(
+            is_speech_start=is_speech_start, timestamp=time.perf_counter()))
+
     async def get_event(self) -> TranscriptEvent | VADEvent | None:
         return await self._transcript_queue.get()
+
+    async def _handle_message(self, msg: dict) -> None:
+        """Translate one Sarvam WS message into queue events.
+
+        Unknown message types / signal shapes are LOGGED (once per type), never
+        silently dropped — a live call showed zero VAD events arriving, and
+        without this we cannot see what the server actually sent."""
+        msg_type = msg.get("type")
+
+        if msg_type == "data":
+            data = msg.get("data", {})
+            evt = TranscriptEvent(
+                text=data.get("transcript", ""),
+                is_final=True,
+                language=data.get("language_code", ""),
+                timestamp=time.perf_counter(),
+            )
+            if evt.text.strip():
+                await self._transcript_queue.put(evt)
+
+        elif msg_type == "events":
+            data = msg.get("data", {})
+            signal = data.get("signal_type", "")
+            if signal in ("START_SPEECH", "END_SPEECH"):
+                await self._transcript_queue.put(VADEvent(
+                    is_speech_start=(signal == "START_SPEECH"),
+                    timestamp=time.perf_counter(),
+                ))
+            else:
+                self._log_unhandled(f"events/{signal}", msg)
+
+        elif msg_type == "error":
+            logger.error("stt.error", msg=msg.get("data", {}).get("message", ""))
+
+        else:
+            self._log_unhandled(str(msg_type), msg)
+
+    def _log_unhandled(self, kind: str, msg: dict) -> None:
+        if kind not in self._seen_unhandled:
+            self._seen_unhandled.add(kind)
+            logger.warning("stt.unhandled_message", kind=kind,
+                           sample=str(msg)[:200].encode("ascii", "replace").decode())
 
     async def _receive_loop(self) -> None:
         try:
@@ -130,32 +193,7 @@ class SarvamSTTClient:
                         break
                     continue
 
-                msg = json.loads(raw)
-                msg_type = msg.get("type")
-
-                if msg_type == "data":
-                    data = msg["data"]
-                    evt = TranscriptEvent(
-                        text=data.get("transcript", ""),
-                        is_final=True,
-                        language=data.get("language_code", ""),
-                        timestamp=time.perf_counter(),
-                    )
-                    if evt.text.strip():
-                        await self._transcript_queue.put(evt)
-
-                elif msg_type == "events":
-                    data = msg["data"]
-                    signal = data.get("signal_type", "")
-                    if signal in ("START_SPEECH", "END_SPEECH"):
-                        evt = VADEvent(
-                            is_speech_start=(signal == "START_SPEECH"),
-                            timestamp=time.perf_counter(),
-                        )
-                        await self._transcript_queue.put(evt)
-
-                elif msg_type == "error":
-                    logger.error("stt.error", msg=msg.get("data", {}).get("message", ""))
+                await self._handle_message(json.loads(raw))
 
         except websockets.ConnectionClosed:
             logger.info("stt.connection_closed")

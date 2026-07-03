@@ -8,7 +8,20 @@ import time
 import structlog
 import websockets
 
+from src.util.backoff import retry_async
+
 logger = structlog.get_logger()
+
+# Bulbul speakers, from the live API's own error listing (2026-07). Used only to
+# warn on an unknown voice — never to block, so new speakers still work.
+KNOWN_VOICES = frozenset({
+    "anushka", "abhilash", "manisha", "vidya", "arya", "karun", "hitesh",
+    "aditya", "ritu", "priya", "neha", "rahul", "pooja", "rohan", "simran",
+    "kavya", "amit", "dev", "ishita", "shreya", "ratan", "varun", "manan",
+    "sumit", "roopa", "kabir", "aayan", "shubh", "ashutosh", "advait", "anand",
+    "tanya", "tarun", "sunny", "mani", "gokul", "vijay", "shruti", "suhani",
+    "mohit", "kavitha", "rehan", "soham", "rupali",
+})
 
 
 class SarvamTTSClient:
@@ -25,18 +38,32 @@ class SarvamTTSClient:
         self._receive_task = None
         self._first_audio_time: float | None = None
         self._send_time: float | None = None
+        self._language: str = "te-IN"
+        self._voice: str = "anushka"
+        self._sample_rate: str = "8000"
 
     async def connect(
         self,
         language: str = "te-IN",
-        voice: str = "meera",
+        voice: str = "anushka",
         sample_rate: str = "8000",
     ) -> None:
-        self._ws = await websockets.connect(
-            "wss://api.sarvam.ai/text-to-speech/ws",
-            additional_headers={"api-subscription-key": self.api_key},
-            ping_interval=20,
-            ping_timeout=10,
+        self._language = language
+        self._voice = voice
+        self._sample_rate = sample_rate
+        if self._receive_task:
+            self._receive_task.cancel()
+        async def _open():
+            return await websockets.connect(
+                "wss://api.sarvam.ai/text-to-speech/ws",
+                additional_headers={"api-subscription-key": self.api_key},
+                ping_interval=20,
+                ping_timeout=10,
+            )
+
+        self._ws = await retry_async(
+            _open, attempts=3, base_delay=0.2,
+            on_retry=lambda a, e: logger.warning("tts.connect_retry", attempt=a, error=str(e)),
         )
 
         config = {
@@ -55,9 +82,30 @@ class SarvamTTSClient:
         self._first_audio_time = None
         logger.info("tts.connected", language=language, voice=voice, model=self.model)
 
-    async def send_text(self, text: str) -> None:
-        if not self._ws:
+    def _needs_language_switch(self, language: str) -> bool:
+        return bool(language) and language != self._language
+
+    async def ensure_language(self, language: str) -> None:
+        """Switch the TTS language to match the caller mid-call (reconnects only
+        when it actually changes — Bulbul's language is fixed per config)."""
+        if not self._needs_language_switch(language):
             return
+        logger.info("tts.language_switch", frm=self._language, to=language)
+        await self.connect(language=language, voice=self._voice, sample_rate=self._sample_rate)
+
+    async def set_voice(self, voice: str) -> None:
+        """Change the speaker for subsequent utterances (reconnects on change)."""
+        if voice == self._voice:
+            return
+        if voice not in KNOWN_VOICES:
+            logger.warning("tts.unknown_voice", voice=voice)
+        await self.connect(language=self._language, voice=voice, sample_rate=self._sample_rate)
+
+    async def send_text(self, text: str) -> None:
+        if not self.is_connected:
+            logger.warning("tts.reconnecting")
+            await self.connect(
+                language=self._language, voice=self._voice, sample_rate=self._sample_rate)
         self._send_time = time.perf_counter()
         msg = json.dumps({"type": "text", "data": {"text": text}})
         await self._ws.send(msg)
