@@ -679,11 +679,18 @@ async def media_stream(websocket: WebSocket):
             except Exception as e:  # noqa: BLE001 — fall back to live TTS
                 logger.warning("greeting.prerender_failed", error=str(e))
 
+        def clear_carrier_buffer() -> None:
+            # Telnyx media-stream 'clear': drops audio already buffered on
+            # their side so a barge-in silences the caller's ear ~instantly
+            # instead of draining 1-1.6s of queued speech.
+            asyncio.ensure_future(websocket.send_text(json.dumps({"event": "clear"})))
+
         engine = build_engine(
             agent,
             stt=stt, llm=llm, tts=tts, send_media=send_media,
             filler=filler, on_transcript=transcript_sink, on_metrics=metrics_sink,
             on_false_recovery=echo_profile.bump_gain,
+            on_pause=clear_carrier_buffer,
             turn_bucket=turn_bucket,
             idle_reprompt_s=settings.idle_reprompt_ms / 1000,
             idle_hangup_s=settings.idle_hangup_ms / 1000,

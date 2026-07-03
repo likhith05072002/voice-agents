@@ -104,6 +104,7 @@ class TurnEngine:
         on_transcript=None,
         on_metrics=None,
         on_false_recovery=None,
+        on_pause=None,
         turn_bucket=None,
         backchannels=BACKCHANNELS,
         hard_phrases=HARD_INTERRUPT,
@@ -146,6 +147,7 @@ class TurnEngine:
         self.on_transcript = on_transcript       # Callable[[str, str], None] | None
         self.on_metrics = on_metrics             # Callable[[dict], None] | None
         self.on_false_recovery = on_false_recovery  # candidate was echo/noise
+        self.on_pause = on_pause                 # flush carrier-side buffered audio
         self.turn_bucket = turn_bucket           # TokenBucket | None (rate limit)
         self.backchannels = backchannels
         self.hard_phrases = hard_phrases
@@ -278,6 +280,14 @@ class TurnEngine:
         self._candidate = True
         self._candidate_t0 = time.perf_counter()
         self._pump_gate.clear()  # pump stops before the next frame
+        if self.on_pause is not None:
+            # Tell the carrier to drop ITS buffered audio too — stopping our
+            # sends still leaves ~1-1.6s queued at Telnyx that leaks out after
+            # a barge-in (measured on live calls).
+            try:
+                self.on_pause()
+            except Exception:  # noqa: BLE001
+                pass
         logger.info("barge_in.candidate", note="paused, awaiting transcript")
         if self.enable_recovery:
             self._candidate_timer = asyncio.create_task(self._candidate_timeout())
@@ -479,6 +489,11 @@ class TurnEngine:
                 pass
         await asyncio.sleep(0)                   # let the pump settle
         self._flush_playback()                  # 3. drop queued audio (critical!)
+        if self.on_pause is not None:            # ...and the carrier's buffer
+            try:
+                self.on_pause()
+            except Exception:  # noqa: BLE001
+                pass
         if self._spoken.strip():                # 4. keep only what was heard
             self.history.append({"role": "assistant", "content": self._spoken})
         self._spoken = ""

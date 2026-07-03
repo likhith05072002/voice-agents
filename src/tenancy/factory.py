@@ -52,6 +52,7 @@ def build_engine(
     on_transcript=None,
     on_metrics=None,
     on_false_recovery=None,
+    on_pause=None,
     turn_bucket=None,
     idle_reprompt_s: float = 10.0,
     idle_hangup_s: float = 30.0,
@@ -89,5 +90,6 @@ def build_engine(
         on_transcript=on_transcript,
         on_metrics=on_metrics,
         on_false_recovery=on_false_recovery,
+        on_pause=on_pause,
         turn_bucket=turn_bucket,
     )
