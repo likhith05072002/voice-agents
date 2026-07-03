@@ -192,7 +192,10 @@ async def _place_outbound(*, to: str, agent_id: str | None,
     """Create one outbound call and pre-register its agent + context.
     Raises on failure; shared by /outbound and the batch dialer."""
     agent = _agent_store.resolve(agent_id=agent_id)
-    from_num = from_number or settings.telnyx_from_number
+    # Caller-ID fallback chain: explicit -> configured -> the business's own
+    # main number (natural for "the AI calls you" flows from the dashboard).
+    from_num = (from_number or settings.telnyx_from_number
+                or settings.main_agent_number)
     if not from_num:
         raise ValueError("no from_number / TELNYX_FROM_NUMBER")
     ccid = await _telnyx.create_call(
@@ -314,6 +317,35 @@ async def dashboard():
 @app.get("/test/scenarios")
 async def test_scenarios():
     return {"scenarios": list_scenarios(SCENARIO_DIR)}
+
+
+@app.get("/agents-lite")
+async def agents_lite():
+    """Public id+name list for the dashboard's call-me selector (no secrets)."""
+    return {"agents": [{"agent_id": a.agent_id, "name": a.name or a.agent_id}
+                       for a in _agent_store.all()]}
+
+
+class CallMeRequest(BaseModel):
+    to: str
+    agent_id: str | None = None
+
+
+@app.post("/test/call-me")
+async def call_me(req: CallMeRequest):
+    """Dashboard: the selected agent calls YOUR phone so you can talk to it."""
+    if not settings.telnyx_connection_id:
+        return JSONResponse({"error": "TELNYX_CONNECTION_ID not configured"}, status_code=400)
+    try:
+        ccid = await _place_outbound(to=req.to, agent_id=req.agent_id,
+                                     from_number=None,
+                                     context={"note": "dashboard call-me test"})
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:  # noqa: BLE001
+        logger.error("call_me.failed", error=str(e))
+        return JSONResponse({"error": "call initiation failed"}, status_code=502)
+    return {"call_control_id": ccid}
 
 
 @app.post("/test/start")

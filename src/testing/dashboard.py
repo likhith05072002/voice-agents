@@ -96,6 +96,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <span class="live-dot"></span>LIVE AUDIO</span>
   </div>
 
+  <div class="controls" style="border-color:#2b3a2b">
+    <span style="font-weight:700">📞 Talk to your AI</span>
+    <select id="callAgent"></select>
+    <input id="myNumber" placeholder="+91XXXXXXXXXX" style="background:#0a0e14;
+      color:#e6edf3;border:1px solid #2b3346;border-radius:8px;padding:10px 12px;
+      font-size:14px;width:180px">
+    <button id="callme" onclick="callMe()"
+      style="background:#1f6feb">📞 Call My Phone</button>
+    <span class="muted" id="callmestate"></span>
+  </div>
+
   <div class="call">
     <div class="phone tester" id="phoneT">
       <div class="avatar">🤖</div>
@@ -146,7 +157,29 @@ async function init() {
   $('#health').textContent = `agents: ${h.agents} · active calls: ${h.active_sessions}`;
   const s = await j('/test/scenarios');
   $('#scenario').innerHTML = s.scenarios.map(n => `<option>${n}</option>`).join('');
+  const a = await j('/agents-lite');
+  $('#callAgent').innerHTML = a.agents.map(x =>
+    `<option value="${esc(x.agent_id)}">${esc(x.name)}</option>`).join('');
+  $('#myNumber').value = localStorage.getItem('myNumber') || '';
   refreshCalls(); setInterval(refreshCalls, 6000);
+}
+
+async function callMe() {
+  const to = $('#myNumber').value.trim();
+  if (!/^\\+\\d{8,15}$/.test(to)) {
+    $('#callmestate').textContent = 'enter number as +91XXXXXXXXXX'; return;
+  }
+  localStorage.setItem('myNumber', to);
+  $('#callme').disabled = true;
+  $('#callmestate').innerHTML = '<span class="live-dot"></span>calling your phone…';
+  const r = await j('/test/call-me', {method:'POST',
+    headers:{'content-type':'application/json'},
+    body: JSON.stringify({to, agent_id: $('#callAgent').value})});
+  if (r.error) { $('#callmestate').textContent = '❌ ' + r.error; }
+  else { $('#callmestate').textContent =
+    '📞 ringing — pick up and talk! (call appears in Recent calls after)'; }
+  setTimeout(() => { $('#callme').disabled = false; }, 8000);
+  setTimeout(refreshCalls, 20000);
 }
 
 function bubble(pane, who, text) {
