@@ -1,0 +1,67 @@
+{
+  "name": "cocolevio-client",
+  "language": "en-IN",
+  "caller_voice": "abhilash",
+  "main_agent_id": "cocolevio",
+  "steps": [
+    {
+      "say": "Hello. I found your website online. Can you tell me what Cocolevio does?",
+      "expect_keywords": [
+        "technology"
+      ],
+      "max_wait_s": 12
+    },
+    {
+      "say": "What services do you offer for a mid sized retail company like ours?",
+      "expect_keywords": [
+        "retail"
+      ],
+      "max_wait_s": 12
+    },
+    {
+      "say": "Interesting. Tell me everything about your artificial intelligence and data analytics work.",
+      "await_full_answer": false,
+      "max_wait_s": 12
+    },
+    {
+      "barge_in_during_answer": "Sorry, quick question. Where exactly is the company located?",
+      "expect_keywords": [
+        "Austin"
+      ],
+      "trigger_after_s": 1.2,
+      "max_wait_s": 12
+    },
+    {
+      "say": "Do you also have any products of your own?",
+      "expect_keywords": [
+        "recruitment"
+      ],
+      "max_wait_s": 12
+    },
+    {
+      "say": "And when was the company founded?",
+      "expect_keywords": [
+        "2015"
+      ],
+      "max_wait_s": 12
+    },
+    {
+      "say": "What would a cloud migration project roughly cost us?",
+      "expect_keywords": [
+        "consultation"
+      ],
+      "max_wait_s": 12
+    },
+    {
+      "say": "That sounds good. Can I book a free consultation for next Tuesday?",
+      "expect_keywords": [
+        "Tuesday"
+      ],
+      "max_wait_s": 12
+    },
+    {
+      "say": "Perfect, thank you so much for the help. Goodbye.",
+      "max_wait_s": 12
+    }
+  ]
+}

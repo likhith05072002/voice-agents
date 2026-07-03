@@ -1,0 +1,10 @@
+{
+  "name": "quick-latency",
+  "language": "en-IN",
+  "caller_voice": "abhilash",
+  "steps": [
+    {"say": "Hi, how much is 24 carat gold per gram?",
+     "expect_keywords": ["7800"], "max_wait_s": 12},
+    {"say": "Thank you, goodbye.", "max_wait_s": 12}
+  ]
+}

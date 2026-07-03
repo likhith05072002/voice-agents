@@ -1,0 +1,16 @@
+{
+  "name": "dental-reception",
+  "language": "en-IN",
+  "caller_voice": "abhilash",
+  "main_agent_id": "dental",
+  "steps": [
+    {"say": "Hello, how much does a cleaning appointment cost?",
+     "expect_keywords": ["2000"], "max_wait_s": 12},
+    {"say": "Tell me about all the services and treatments you offer in detail.",
+     "await_full_answer": false, "max_wait_s": 12},
+    {"barge_in_during_answer": "Wait. Is the clinic open on Sunday?",
+     "expect_keywords": ["closed"], "trigger_after_s": 1.0, "max_wait_s": 12},
+    {"say": "Okay, book me a cleaning on Saturday at ten AM.",
+     "expect_keywords": ["book"], "max_wait_s": 12}
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "name": "cafe-booking",
+  "language": "en-IN",
+  "caller_voice": "abhilash",
+  "main_agent_id": "cafe",
+  "steps": [
+    {"say": "Hi, I want to book a table for four people tomorrow at seven PM.",
+     "expect_keywords": ["four"], "max_wait_s": 12},
+    {"say": "Also, tell me everything about your weekend brunch buffet options and pricing.",
+     "await_full_answer": false, "max_wait_s": 12},
+    {"barge_in_during_answer": "Sorry to cut you off, what time does the kitchen close?",
+     "expect_keywords": ["ten thirty"], "trigger_after_s": 1.0, "max_wait_s": 12},
+    {"say": "Please confirm my table booking.", "max_wait_s": 12}
+  ]
+}

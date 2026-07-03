@@ -1,0 +1,15 @@
+{
+  "name": "jewellery-basic",
+  "language": "en-IN",
+  "caller_voice": "abhilash",
+  "steps": [
+    {"say": "Hello, what is the price of 22 carat gold today?",
+     "expect_keywords": ["7150"], "max_wait_s": 12},
+    {"say": "What are your shop timings?",
+     "expect_keywords": ["10", "9"], "max_wait_s": 12},
+    {"say": "Tell me everything about your gold exchange and buyback policies in detail.",
+     "await_full_answer": false, "max_wait_s": 12},
+    {"barge_in_during_answer": "Wait, actually just tell me if you sell silver items.",
+     "trigger_after_s": 1.0, "max_wait_s": 12}
+  ]
+}
