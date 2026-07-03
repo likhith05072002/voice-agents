@@ -94,6 +94,7 @@ class TurnEngine:
         filler=None,
         enable_fillers: bool = False,
         frame_pace_s: float = FRAME_PACE_S,
+        pace_lead_s: float = 0.08,
         min_words: int = 2,
         false_timeout_s: float = 1.2,
         speech_end_grace_s: float = 0.3,
@@ -128,6 +129,9 @@ class TurnEngine:
         self.filler = filler
         self.enable_fillers = enable_fillers
         self.frame_pace_s = frame_pace_s
+        # Cushion of audio kept queued at the carrier (absorbs event-loop
+        # jitter; costs the same amount of extra tail on a barge-in pause).
+        self.pace_lead_s = pace_lead_s
 
         # guard-stack tunables
         self.min_words = min_words
@@ -873,6 +877,7 @@ class TurnEngine:
         """
         loop = asyncio.get_event_loop()
         next_send: float | None = None
+        late_frames = 0
         gate = self._pump_gate
         while True:
             if not gate.is_set():                # only await when actually paused
@@ -881,6 +886,9 @@ class TurnEngine:
             if item is _END:
                 self._turn_done.set()
                 next_send = None                 # reset the clock between turns
+                if late_frames:
+                    logger.info("pump.late_frames", n=late_frames)
+                    late_frames = 0
                 continue
             if isinstance(item, _SpokenMark):
                 self._spoken += item.text         # this text was actually heard
@@ -893,9 +901,17 @@ class TurnEngine:
                 # timeline slip is inaudible; a post-interrupt leak is not.
                 if next_send is None or now - next_send > 0.08:
                     next_send = now              # fresh turn / stall / post-pause
-                delay = next_send - now
+                # Send each frame PACE_LEAD_S ahead of its deadline so the
+                # carrier holds a small cushion. Exact-deadline pacing has zero
+                # slack: every event-loop stall >20ms (Windows' coarse timer,
+                # DSP/STT work sharing the loop) starved the carrier and played
+                # out as mid-word micro-gaps — the "loose mic wire" patting,
+                # denser as calls age and per-turn work grows.
+                delay = next_send - self.pace_lead_s - now
                 if delay > 0:
                     await asyncio.sleep(delay)
+                elif delay < -0.04:
+                    late_frames += 1             # >40ms late = audible risk
                 next_send += self.frame_pace_s
             if self._turn_metrics is not None:
                 tm = self._turn_metrics
