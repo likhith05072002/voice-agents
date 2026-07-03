@@ -560,6 +560,8 @@ async def media_stream(websocket: WebSocket):
                 start_frame = msg
                 break
         ccid = start_frame.get("start", {}).get("call_control_id", "")
+        stream_id = (start_frame.get("stream_id")
+                     or start_frame.get("start", {}).get("stream_id", ""))
         media_encoding = start_frame.get("start", {}).get(
             "media_format", {}).get("encoding", "")
 
@@ -682,8 +684,12 @@ async def media_stream(websocket: WebSocket):
         def clear_carrier_buffer() -> None:
             # Telnyx media-stream 'clear': drops audio already buffered on
             # their side so a barge-in silences the caller's ear ~instantly
-            # instead of draining 1-1.6s of queued speech.
-            asyncio.ensure_future(websocket.send_text(json.dumps({"event": "clear"})))
+            # instead of draining 1-1.6s of queued speech. The stream_id is
+            # required for the carrier to address the right stream.
+            msg = {"event": "clear"}
+            if stream_id:
+                msg["stream_id"] = stream_id
+            asyncio.ensure_future(websocket.send_text(json.dumps(msg)))
 
         engine = build_engine(
             agent,
