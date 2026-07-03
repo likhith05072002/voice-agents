@@ -7,6 +7,7 @@ import time
 
 import structlog
 import websockets
+from urllib.parse import quote
 
 from src.util.backoff import retry_async
 
@@ -54,8 +55,11 @@ class SarvamTTSClient:
         if self._receive_task:
             self._receive_task.cancel()
         async def _open():
+            # Model is selected by URL query param — the WS ignores a "model"
+            # field in the config message and silently serves bulbul:v2 (which
+            # rejects v3-only speakers like ishita with a 400 per utterance).
             return await websockets.connect(
-                "wss://api.sarvam.ai/text-to-speech/ws",
+                f"wss://api.sarvam.ai/text-to-speech/ws?model={quote(self.model)}",
                 additional_headers={"api-subscription-key": self.api_key},
                 ping_interval=20,
                 ping_timeout=10,
@@ -71,7 +75,6 @@ class SarvamTTSClient:
             "data": {
                 "target_language_code": language,
                 "speaker": voice,
-                "model": self.model,
                 "speech_sample_rate": sample_rate,
                 "output_audio_codec": "linear16",
                 "send_completion_event": True,
