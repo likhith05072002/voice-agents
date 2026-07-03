@@ -639,6 +639,9 @@ class TurnEngine:
             if text is None:
                 return
             emitted = False
+            carry = b""     # partial-frame PCM carried ACROSS chunks: framing
+                            # each chunk separately injected a click ("pat pat
+                            # pat") at every chunk boundary on live calls.
             while True:
                 try:
                     audio = await asyncio.wait_for(
@@ -654,7 +657,14 @@ class TurnEngine:
                     self._turn_metrics.mark("tts_first_audio")
                 if self.state != State.SPEAKING:
                     self.state = State.SPEAKING
-                for frame in self._to_frames(audio):
+                data = carry + audio
+                usable = (len(data) // (FRAME_BYTES * 2)) * (FRAME_BYTES * 2)
+                carry = data[usable:]
+                for frame in self._to_frames(data[:usable]):
+                    await self._playback_queue.put(frame)
+                    emitted = True
+            if carry:                        # utterance tail: pad ONCE, at the end
+                for frame in self._to_frames(carry):
                     await self._playback_queue.put(frame)
                     emitted = True
             if emitted:
@@ -797,7 +807,11 @@ class TurnEngine:
         if len(pcm16_8k) % 2:
             pcm16_8k = pcm16_8k[:-1]
         ulaw = audioop.lin2ulaw(pcm16_8k, 2)
-        return [ulaw[i:i + FRAME_BYTES] for i in range(0, len(ulaw), FRAME_BYTES)]
+        frames = [ulaw[i:i + FRAME_BYTES] for i in range(0, len(ulaw), FRAME_BYTES)]
+        # Never emit a short frame: carriers glitch on it (audible click).
+        if frames and len(frames[-1]) < FRAME_BYTES:
+            frames[-1] += b"\xff" * (FRAME_BYTES - len(frames[-1]))  # u-law silence
+        return frames
 
     async def _playback_pump(self) -> None:
         """Drain the playback queue to the carrier at real time, pausable.
@@ -832,8 +846,12 @@ class TurnEngine:
                 continue
             if self.frame_pace_s:
                 now = loop.time()
-                if next_send is None or now - next_send > 0.2:
-                    next_send = now              # fresh turn or post-pause re-anchor
+                # Re-anchor when behind by >80ms instead of burst-flooding to
+                # catch up: bursts pile up in the carrier's downstream buffer
+                # and LEAK OUT as 1-2s of voice after a barge-in pause. A small
+                # timeline slip is inaudible; a post-interrupt leak is not.
+                if next_send is None or now - next_send > 0.08:
+                    next_send = now              # fresh turn / stall / post-pause
                 delay = next_send - now
                 if delay > 0:
                     await asyncio.sleep(delay)
