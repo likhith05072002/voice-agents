@@ -107,6 +107,43 @@ async def test_llm_not_told_when_switch_disabled():
     assert all("Kannada" not in m["content"] for m in llm.messages[0])
 
 
+class _FlipLLM:
+    """Returns English on the first call, Kannada on the retry."""
+    def __init__(self):
+        self.calls = 0
+        self.cancelled = 0
+    async def generate_sentences(self, messages, queue):
+        self.calls += 1
+        text = ("We are a technology company. " if self.calls == 1
+                else "ನಾವು ತಂತ್ರಜ್ಞಾನ ಕಂಪನಿ. ")
+        await queue.put(SentenceEvent(text=text, is_first=True, timestamp=0.0))
+        await queue.put(None)
+        return text
+    def cancel(self): self.cancelled += 1
+
+
+async def test_language_guard_regenerates_wrong_language_reply():
+    tts = _LangTTS()
+    llm = _FlipLLM()
+    sent = []
+    spoken = []
+    engine = TurnEngine(stt=_STT(), llm=llm, tts=tts,
+                        send_media=lambda f: sent.append(f) or _noop(),
+                        system_prompt="s", greeting_text="", frame_pace_s=0,
+                        enable_language_switch=True,
+                        on_transcript=lambda role, t: spoken.append((role, t)))
+    run = asyncio.create_task(engine.run())
+    await engine.stt.q.put(TranscriptEvent(text="ನಿಮ್ಮ ಸೇವೆಗಳ ಬಗ್ಗೆ ಹೇಳಿ", is_final=True,
+                                           language="kn-IN", timestamp=0.0))
+    await _wait(lambda: any(h["role"] == "assistant" for h in engine.history))
+    await engine.stt.q.put(None)
+    await asyncio.wait_for(run, timeout=4.0)
+    assert llm.calls == 2                        # retried once
+    said = " ".join(t for r, t in spoken if r == "assistant")
+    assert "technology company" not in said      # English draft never spoken
+    assert "ತಂತ್ರಜ್ಞಾನ" in said                   # Kannada retry was
+
+
 def test_script_matches_detects_language():
     from src.testing.runner import _script_matches
     kn = "ನಮ್ಮ ಕಂಪನಿ ಆಸ್ಟಿನ್ ನಗರದಲ್ಲಿದೆ. Cocolevio 2015."

@@ -14,12 +14,13 @@ class _STT:
 
 
 class _SlowLLM:
-    """First token after 100ms (models LLM TTFT)."""
+    """First token after 100ms (models LLM TTFT). Replies in the caller's
+    language (Hindi) so the language guard doesn't trigger a regenerate."""
     async def generate_sentences(self, messages, queue):
         await asyncio.sleep(0.1)
-        await queue.put(SentenceEvent(text="Hello. ", is_first=True, timestamp=0.0))
+        await queue.put(SentenceEvent(text="नमस्ते जी. ", is_first=True, timestamp=0.0))
         await queue.put(None)
-        return "Hello. "
+        return "नमस्ते जी. "
     def cancel(self): ...
 
 

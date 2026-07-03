@@ -63,6 +63,17 @@ LANGUAGE_NAMES = {
     "pa-IN": "Punjabi", "od-IN": "Odia",
 }
 
+# Unicode script blocks per language, for verifying the LLM actually replied in
+# the caller's language (the directive raises compliance but is probabilistic —
+# live: one Kannada turn in a long English-heavy call came back in English).
+_SCRIPT_BLOCKS = {
+    "hi-IN": (0x0900, 0x097F), "mr-IN": (0x0900, 0x097F),
+    "bn-IN": (0x0980, 0x09FF), "pa-IN": (0x0A00, 0x0A7F),
+    "gu-IN": (0x0A80, 0x0AFF), "od-IN": (0x0B00, 0x0B7F),
+    "ta-IN": (0x0B80, 0x0BFF), "te-IN": (0x0C00, 0x0C7F),
+    "kn-IN": (0x0C80, 0x0CFF), "ml-IN": (0x0D00, 0x0D7F),
+}
+
 _END = object()  # end-of-utterance marker on the playback queue
 
 # One 20ms frame of mu-law digital silence. Sent whenever we have nothing to
@@ -575,6 +586,24 @@ class TurnEngine:
         except Exception as e:  # noqa: BLE001 — a failed action must not kill the loop
             logger.error("deferred_action_failed", error=str(e))
 
+    def _wrong_language(self, text: str) -> bool:
+        """True if ``text`` is clearly NOT in the caller's current language.
+        Conservative: needs >=4 letters to judge, and mixed content (brand
+        names, digits) passes as long as half the letters are in-script."""
+        if not (self.enable_language_switch and self._caller_language):
+            return False
+        letters = [c for c in text if c.isalpha()]
+        if len(letters) < 4:
+            return False
+        block = _SCRIPT_BLOCKS.get(self._caller_language)
+        if block is None:                        # English (or unknown): expect ASCII
+            if self._caller_language in LANGUAGE_NAMES:
+                share = sum(c.isascii() for c in letters) / len(letters)
+                return share < 0.5
+            return False
+        share = sum(block[0] <= ord(c) <= block[1] for c in letters) / len(letters)
+        return share < 0.5
+
     async def _maybe_switch_language(self) -> None:
         """Reconnect TTS to the caller's language if it changed (no-op otherwise)."""
         if (self.enable_language_switch and self._caller_language
@@ -619,6 +648,8 @@ class TurnEngine:
         collector = asyncio.create_task(self._collect_tts_audio(pending))
         await self.tts.reset()
         full = ""
+        first = True
+        retried = False
         try:
             while True:
                 evt = await sentence_queue.get()
@@ -626,6 +657,32 @@ class TurnEngine:
                     break
                 if isinstance(evt, SentenceEvent):
                     tl.mark("llm_first_token")
+                    # Language guard: verify the FIRST sentence is in the
+                    # caller's language BEFORE any of it reaches TTS; one
+                    # regenerate with a blunt corrective. Nothing wrong-language
+                    # is ever spoken; cost is one extra TTFT only on violation.
+                    if first and not retried and self._wrong_language(evt.text):
+                        lang = LANGUAGE_NAMES.get(self._caller_language, "")
+                        logger.warning("language.guard_retry", want=lang,
+                                       got=evt.text[:40].encode("ascii", "replace").decode())
+                        self.llm.cancel()
+                        llm_task.cancel()
+                        try:
+                            await llm_task
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                        sentence_queue = asyncio.Queue()
+                        messages = messages + [{
+                            "role": "system",
+                            "content": (f"STOP. That reply was not in {lang}. "
+                                        f"Rewrite your ENTIRE answer strictly in "
+                                        f"{lang} (native script). Do not use any "
+                                        f"other language.")}]
+                        llm_task = asyncio.create_task(
+                            self.llm.generate_sentences(messages, sentence_queue))
+                        retried = True
+                        continue
+                    first = False
                     text, blocked = self._guard(evt.text, active_prompt)
                     if blocked:
                         logger.warning("safety.output_blocked")
