@@ -49,14 +49,18 @@ async def _render_rest(text: str, language: str, voice: str, api_key: str) -> by
     import httpx
 
     async with httpx.AsyncClient(timeout=30.0) as client:
+        # Match the live WS model (v3) so pre-rendered audio (greetings) is the
+        # SAME voice as mid-call TTS. Never silently swap the speaker: a wrong-
+        # voice render would be cached under the requested voice's key and the
+        # greeting would permanently sound like a different person.
         body = {"text": text, "target_language_code": language, "speaker": voice,
-                "model": "bulbul:v2", "speech_sample_rate": 8000}
+                "model": "bulbul:v3", "speech_sample_rate": 8000}
         resp = await client.post(
             "https://api.sarvam.ai/text-to-speech",
             headers={"api-subscription-key": api_key, "content-type": "application/json"},
             json=body)
-        if resp.status_code == 400:            # e.g. voice not on this model
-            body["speaker"] = "anushka"
+        if resp.status_code == 400:            # voice/model mismatch: try v2, same voice
+            body["model"] = "bulbul:v2"
             resp = await client.post(
                 "https://api.sarvam.ai/text-to-speech",
                 headers={"api-subscription-key": api_key,

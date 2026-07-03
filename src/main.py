@@ -588,7 +588,9 @@ async def media_stream(websocket: WebSocket):
 
         agent_id = info.get("agent_id")
         agent = (_agent_store.get(agent_id) if agent_id else None) or _agent_store.default()
-        logger.info("call.started", agent=agent.agent_id)
+        logger.info("call.started", agent=agent.agent_id,
+                    media_format=str(start_frame.get("start", {}).get("media_format", {})),
+                    decoding="PCMA" if "PCMA" in (media_encoding or "PCMA").upper() else "PCMU")
 
         recorder = CallRecorder(
             call_id=ccid, agent_id=agent.agent_id,
