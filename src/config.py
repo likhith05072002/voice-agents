@@ -152,7 +152,7 @@ class Settings(BaseSettings):
     enable_idle: bool = True
     idle_reprompt_ms: int = 10000    # re-prompt a silent caller after this
     idle_hangup_ms: int = 30000      # end the call after this much silence
-    idle_reprompt_text: str = "మీరు ఇంకా లైన్‌లో ఉన్నారా?"  # "Are you still on the line?"
+    idle_reprompt_text: str = "Are you still there?"
     # Switch the TTS voice language to match the language the caller is speaking.
     enable_language_switch: bool = True
 
