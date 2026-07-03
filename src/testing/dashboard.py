@@ -164,6 +164,8 @@ async function init() {
   refreshCalls(); setInterval(refreshCalls, 6000);
 }
 
+let livePoll = null, liveSince = 0, liveIdle = 0, wasActive = false;
+
 async function callMe() {
   const to = $('#myNumber').value.trim();
   if (!/^\\+\\d{8,15}$/.test(to)) {
@@ -175,11 +177,42 @@ async function callMe() {
   const r = await j('/test/call-me', {method:'POST',
     headers:{'content-type':'application/json'},
     body: JSON.stringify({to, agent_id: $('#callAgent').value})});
-  if (r.error) { $('#callmestate').textContent = '❌ ' + r.error; }
-  else { $('#callmestate').textContent =
-    '📞 ringing — pick up and talk! (call appears in Recent calls after)'; }
-  setTimeout(() => { $('#callme').disabled = false; }, 8000);
-  setTimeout(refreshCalls, 20000);
+  if (r.error) { $('#callmestate').textContent = '❌ ' + r.error;
+                 $('#callme').disabled = false; return; }
+  $('#callmestate').textContent = '📞 ringing — pick up and talk!';
+  // Flip the split view into live You <-> Agent conversation mode.
+  $('#phoneT').querySelector('h3').textContent = 'You';
+  $('#phoneT').querySelector('.num').textContent = to + ' · live caller';
+  $('#talkT').innerHTML = ''; $('#talkA').innerHTML = '';
+  $('#linklbl').textContent = 'LIVE PHONE CALL';
+  liveSince = Date.now()/1000; liveIdle = 0; wasActive = false;
+  if (livePoll) clearInterval(livePoll);
+  livePoll = setInterval(pollLiveCall, 600);
+}
+
+async function pollLiveCall() {
+  const r = await j(`/live-transcript?since=${liveSince}`);
+  for (const l of (r.lines || [])) {
+    liveSince = Math.max(liveSince, l.t);
+    if (l.role === 'user') { bubble($('#talkT'), 'you say', l.text);
+                             flash('#phoneT'); }
+    else { bubble($('#talkA'), 'says', l.text); flash('#phoneA'); }
+  }
+  if (r.active > 0) { wasActive = true; liveIdle = 0; }
+  else if (wasActive && ++liveIdle > 8) {          // call ended ~5s ago
+    clearInterval(livePoll); livePoll = null;
+    $('#callmestate').textContent = '✅ call ended — see Recent calls';
+    $('#linklbl').textContent = 'idle';
+    $('#callme').disabled = false;
+    refreshCalls();
+  }
+}
+
+function flash(sel) {
+  const el = $(sel);
+  el.classList.add('speaking');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove('speaking'), 1500);
 }
 
 function bubble(pane, who, text) {

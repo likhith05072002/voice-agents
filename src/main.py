@@ -319,6 +319,14 @@ async def test_scenarios():
     return {"scenarios": list_scenarios(SCENARIO_DIR)}
 
 
+@app.get("/live-transcript")
+async def live_transcript(since: float = 0.0):
+    """Live feed of user/assistant lines across active calls — powers the
+    dashboard's real-time view for 'Call My Phone' conversations."""
+    return {"lines": [x for x in _live_transcripts if x["t"] > since],
+            "active": _sessions.active}
+
+
 @app.get("/agents-lite")
 async def agents_lite():
     """Public id+name list for the dashboard's call-me selector (no secrets)."""
