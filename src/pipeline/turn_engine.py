@@ -65,6 +65,12 @@ LANGUAGE_NAMES = {
 
 _END = object()  # end-of-utterance marker on the playback queue
 
+# One 20ms frame of mu-law digital silence. Sent whenever we have nothing to
+# say: a stream that stops between utterances makes the carrier's comfort-noise
+# generator toggle at every sentence edge, which callers hear as soft thumps
+# ("pat pat pat") throughout multi-sentence answers.
+_SILENCE_FRAME = b"\xff" * FRAME_BYTES
+
 
 @dataclass
 class _SpokenMark:
@@ -132,6 +138,9 @@ class TurnEngine:
         # Cushion of audio kept queued at the carrier (absorbs event-loop
         # jitter; costs the same amount of extra tail on a barge-in pause).
         self.pace_lead_s = pace_lead_s
+        # Debug tap: set to a bytearray to capture every frame actually sent
+        # (lets a recording of what WE sent be diffed against what arrived).
+        self.tap: bytearray | None = None
 
         # guard-stack tunables
         self.min_words = min_words
@@ -878,21 +887,37 @@ class TurnEngine:
         loop = asyncio.get_event_loop()
         next_send: float | None = None
         late_frames = 0
+        underruns = 0                # queue ran dry MID-sentence (TTS starving us)
+        mid_sentence = False
         gate = self._pump_gate
         while True:
             if not gate.is_set():                # only await when actually paused
                 await gate.wait()
-            item = await self._playback_queue.get()
+            is_fill = False
+            if self.frame_pace_s:
+                try:
+                    item = self._playback_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    if mid_sentence:
+                        underruns += 1           # caller hears a mid-word gap here
+                    item = _SILENCE_FRAME        # keep the RTP stream warm
+                    is_fill = True
+            else:
+                item = await self._playback_queue.get()
             if item is _END:
                 self._turn_done.set()
                 next_send = None                 # reset the clock between turns
-                if late_frames:
-                    logger.info("pump.late_frames", n=late_frames)
-                    late_frames = 0
+                if late_frames or underruns:
+                    logger.info("pump.stats", late=late_frames, underruns=underruns)
+                    late_frames = underruns = 0
+                mid_sentence = False
                 continue
             if isinstance(item, _SpokenMark):
                 self._spoken += item.text         # this text was actually heard
+                mid_sentence = False              # sentence boundary: a wait is OK
                 continue
+            if not is_fill:
+                mid_sentence = True
             if self.frame_pace_s:
                 now = loop.time()
                 # Re-anchor when behind by >80ms instead of burst-flooding to
@@ -913,13 +938,15 @@ class TurnEngine:
                 elif delay < -0.04:
                     late_frames += 1             # >40ms late = audible risk
                 next_send += self.frame_pace_s
-            if self._turn_metrics is not None:
+            if self._turn_metrics is not None and not is_fill:
                 tm = self._turn_metrics
                 tm.mark("first_frame_out")    # first audio the caller hears
                 if not tm.emitted:
                     self._publish_metrics(tm)  # perceived_ms is known NOW
             try:
                 await self.send_media(item)
+                if self.tap is not None:
+                    self.tap += item             # debug: exact bytes we sent
             except Exception as e:
                 logger.warning("pump.send_failed", error=str(e))
                 break

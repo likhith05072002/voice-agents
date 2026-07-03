@@ -12,6 +12,8 @@ import asyncio
 import audioop
 import base64
 import json
+import os
+import re
 import time
 from contextlib import asynccontextmanager
 
@@ -549,7 +551,7 @@ async def media_stream(websocket: WebSocket):
         await websocket.close(code=1013)   # 1013 = try again later
         return
 
-    stt = llm = tts = recorder = agent = warmup_task = None
+    stt = llm = tts = recorder = agent = warmup_task = engine = None
     resampler = Resampler()
     try:
         # Wait for the stream-start frame; it carries the call id.
@@ -706,6 +708,8 @@ async def media_stream(websocket: WebSocket):
             greeting_audio=greeting_audio,
             instant_pause=settings.bargein_instant_pause,
         )
+        if os.environ.get("PUMP_TAP"):
+            engine.tap = bytearray()   # capture exactly what we send (debug)
 
         # Human handoff: give the LLM a transfer_call tool bound to this call.
         if agent.transfer_numbers and ccid:
@@ -814,6 +818,17 @@ async def media_stream(websocket: WebSocket):
                                      secret=agent.webhook_secret)
             except Exception as e:  # noqa: BLE001 — teardown must never crash
                 logger.error("call_teardown_failed", error=str(e))
+        if engine is not None and engine.tap:
+            try:                       # what WE sent, as audio (debug tap)
+                import wave as _wave
+                os.makedirs("data/test_runs", exist_ok=True)
+                safe = re.sub(r"\W", "", (ccid or "x"))[-12:]  # ccid has ':' — illegal on Windows
+                with _wave.open(f"data/test_runs/sent-{safe}.wav", "wb") as w:
+                    w.setnchannels(1); w.setsampwidth(2); w.setframerate(8000)
+                    w.writeframes(audioop.ulaw2lin(bytes(engine.tap), 2))
+                logger.info("pump.tap_saved", bytes=len(engine.tap))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pump.tap_save_failed", error=str(e))
         if warmup_task is not None:
             warmup_task.cancel()
         if stt is not None:
