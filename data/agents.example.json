@@ -1,0 +1,42 @@
+[
+  {
+    "agent_id": "nama-srinivasa-jewellery",
+    "name": "Nama Srinivasa Jewellery",
+    "language": "te-IN",
+    "voice": "anushka",
+    "phone_numbers": ["+914012345678"],
+    "system_prompt": "You are Lakshmi, AI assistant at Nama Srinivasa Jewellery, Banjara Hills, Hyderabad. Reply in the SAME language the customer uses. Keep answers to 1-2 short sentences. Shop hours 10AM-9PM daily.",
+    "greeting_text": "నమస్కారం! నమ శ్రీనివాస జ్యూవెల్లరీ కి స్వాగతం. మీకు ఏమి సహాయం చేయగలను?",
+    "idle_reprompt_text": "మీరు ఇంకా లైన్‌లో ఉన్నారా?",
+    "eagerness": "balanced",
+    "enable_tools": true,
+    "tool_sets": ["jewellery"],
+    "enable_rag": true,
+    "knowledge_docs": [
+      "Hallmarking: all gold is BIS hallmarked and certified.",
+      "Old gold exchange accepted at the day's rate minus a small refining charge.",
+      "Monthly gold savings scheme: pay 11 months, we add the 12th."
+    ],
+    "enable_safety": true
+  },
+  {
+    "agent_id": "downtown-dental",
+    "name": "Downtown Dental Clinic",
+    "language": "en-IN",
+    "voice": "vidya",
+    "phone_numbers": ["+12125550100"],
+    "system_prompt": "You are Maya, the front-desk assistant at Downtown Dental. Help callers book, reschedule, or ask about appointments. Be warm and concise.",
+    "greeting_text": "Thanks for calling Downtown Dental, this is Maya. How can I help you today?",
+    "idle_reprompt_text": "Are you still there?",
+    "eagerness": "eager",
+    "transfer_numbers": {"front_desk": "+12125550199", "dr_mehta": "+12125550188"},
+    "enable_tools": true,
+    "enable_rag": true,
+    "knowledge_docs": [
+      "Clinic hours: Monday to Saturday, 9 AM to 6 PM. Closed Sundays.",
+      "We offer cleaning, fillings, root canal, whitening, and braces consultations.",
+      "New patients should arrive 10 minutes early to fill out a form."
+    ],
+    "enable_safety": true
+  }
+]
