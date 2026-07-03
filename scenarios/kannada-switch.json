@@ -1,0 +1,33 @@
+{
+  "name": "kannada-switch",
+  "main_agent_id": "cocolevio",
+  "language": "en-IN",
+  "caller_voice": "abhilash",
+  "steps": [
+    {
+      "say": "Hello. Can you tell me what Cocolevio does?",
+      "expect_keywords": ["technology"],
+      "expect_language": "en-IN"
+    },
+    {
+      "say": "ಈಗ ನಾವು ಕನ್ನಡದಲ್ಲಿ ಮಾತನಾಡೋಣ. ನಿಮ್ಮ ಕಂಪನಿಯ ಸೇವೆಗಳ ಬಗ್ಗೆ ಹೇಳಿ.",
+      "language": "kn-IN",
+      "expect_language": "kn-IN"
+    },
+    {
+      "say": "ನಿಮ್ಮ ಕಂಪನಿ ಎಲ್ಲಿದೆ?",
+      "language": "kn-IN",
+      "expect_language": "kn-IN"
+    },
+    {
+      "say": "ಕಂಪನಿ ಯಾವ ವರ್ಷ ಪ್ರಾರಂಭವಾಯಿತು?",
+      "language": "kn-IN",
+      "expect_language": "kn-IN"
+    },
+    {
+      "say": "Okay, let's switch back to English now. When was Cocolevio founded?",
+      "expect_keywords": ["2015"],
+      "expect_language": "en-IN"
+    }
+  ]
+}

@@ -53,6 +53,16 @@ logger = structlog.get_logger()
 FRAME_BYTES = 160
 FRAME_PACE_S = 0.02
 
+# STT language codes -> names the LLM understands (for the reply-language
+# directive). Only languages Sarvam actually detects; unknown codes are ignored
+# rather than guessed, so a garbled detection can't flip the reply language.
+LANGUAGE_NAMES = {
+    "en-IN": "English", "hi-IN": "Hindi", "kn-IN": "Kannada",
+    "te-IN": "Telugu", "ta-IN": "Tamil", "ml-IN": "Malayalam",
+    "mr-IN": "Marathi", "bn-IN": "Bengali", "gu-IN": "Gujarati",
+    "pa-IN": "Punjabi", "od-IN": "Odia",
+}
+
 _END = object()  # end-of-utterance marker on the playback queue
 
 
@@ -730,6 +740,22 @@ class TurnEngine:
                                 "contradict them):\n- " + "\n- ".join(snippets))
                 logger.info("rag.injected", n=len(snippets))
         messages = [{"role": "system", "content": sys_content}] + select_context(self.history)
+        # Mirror the caller's language. TTS reconnection alone is not enough —
+        # the LLM keeps answering in the prompt's language unless told, so a
+        # caller who switches to Kannada mid-call would hear Kannada-accented
+        # English. The directive goes LAST: buried in a long English system
+        # prompt with English history, the model follows conversation momentum
+        # and ignores it (seen live); recency makes it stick.
+        if self.enable_language_switch and self._caller_language:
+            lang = LANGUAGE_NAMES.get(self._caller_language, "")
+            if lang:
+                messages.append({
+                    "role": "system",
+                    "content": (f"The caller is now speaking {lang}. Reply ONLY "
+                                f"in {lang} (native script), even though the "
+                                f"instructions, facts and earlier turns are in "
+                                f"another language.")})
+                logger.info("language.directive", lang=lang)
 
         if self.enable_fillers and self.filler is not None:
             self.state = State.SPEAKING

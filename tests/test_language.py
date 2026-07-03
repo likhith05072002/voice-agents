@@ -22,7 +22,9 @@ class _STT:
 
 
 class _LLM:
+    def __init__(self): self.messages = []
     async def generate_sentences(self, messages, queue):
+        self.messages.append(messages)
         await queue.put(SentenceEvent(text="ok. ", is_first=True, timestamp=0.0))
         await queue.put(None)
         return "ok. "
@@ -68,6 +70,52 @@ async def test_no_switch_when_disabled():
     await engine.stt.q.put(None)
     await asyncio.wait_for(run, timeout=4.0)
     assert tts.langs == []
+
+
+async def test_llm_told_to_reply_in_caller_language():
+    tts = _LangTTS()
+    llm = _LLM()
+    sent = []
+    engine = TurnEngine(stt=_STT(), llm=llm, tts=tts,
+                        send_media=lambda f: sent.append(f) or _noop(),
+                        system_prompt="s", greeting_text="", frame_pace_s=0,
+                        enable_language_switch=True)
+    run = asyncio.create_task(engine.run())
+    await engine.stt.q.put(TranscriptEvent(text="ನಮಸ್ಕಾರ", is_final=True,
+                                           language="kn-IN", timestamp=0.0))
+    await _wait(lambda: any(h["role"] == "assistant" for h in engine.history))
+    await engine.stt.q.put(None)
+    await asyncio.wait_for(run, timeout=4.0)
+    last = llm.messages[0][-1]
+    assert last["role"] == "system" and "Kannada" in last["content"]
+
+
+async def test_llm_not_told_when_switch_disabled():
+    tts = _LangTTS()
+    llm = _LLM()
+    sent = []
+    engine = TurnEngine(stt=_STT(), llm=llm, tts=tts,
+                        send_media=lambda f: sent.append(f) or _noop(),
+                        system_prompt="s", greeting_text="", frame_pace_s=0,
+                        enable_language_switch=False)
+    run = asyncio.create_task(engine.run())
+    await engine.stt.q.put(TranscriptEvent(text="ನಮಸ್ಕಾರ", is_final=True,
+                                           language="kn-IN", timestamp=0.0))
+    await _wait(lambda: any(h["role"] == "assistant" for h in engine.history))
+    await engine.stt.q.put(None)
+    await asyncio.wait_for(run, timeout=4.0)
+    assert all("Kannada" not in m["content"] for m in llm.messages[0])
+
+
+def test_script_matches_detects_language():
+    from src.testing.runner import _script_matches
+    kn = "ನಮ್ಮ ಕಂಪನಿ ಆಸ್ಟಿನ್ ನಗರದಲ್ಲಿದೆ. Cocolevio 2015."
+    assert _script_matches(kn, "kn-IN") is True
+    assert _script_matches(kn, "en-IN") is False
+    en = "We are based in Austin, Texas."
+    assert _script_matches(en, "en-IN") is True
+    assert _script_matches(en, "kn-IN") is False
+    assert _script_matches("", "kn-IN") is False
 
 
 async def _noop():

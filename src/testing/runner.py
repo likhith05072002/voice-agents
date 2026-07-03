@@ -24,6 +24,32 @@ from src.testing.caller import render_utterances
 
 logger = structlog.get_logger()
 
+# Unicode script blocks for verifying WHICH LANGUAGE an answer was spoken in.
+_SCRIPT_RANGES = {
+    "hi-IN": (0x0900, 0x097F), "mr-IN": (0x0900, 0x097F),   # Devanagari
+    "bn-IN": (0x0980, 0x09FF), "pa-IN": (0x0A00, 0x0A7F),
+    "gu-IN": (0x0A80, 0x0AFF), "od-IN": (0x0B00, 0x0B7F),
+    "ta-IN": (0x0B80, 0x0BFF), "te-IN": (0x0C00, 0x0C7F),
+    "kn-IN": (0x0C80, 0x0CFF), "ml-IN": (0x0D00, 0x0D7F),
+}
+
+
+def _script_matches(text: str, language: str) -> bool:
+    """True if most letters in ``text`` are in ``language``'s script. Loose
+    (50%) on purpose: answers legitimately mix scripts for names/brands
+    ("Cocolevio", "Austin") and digits."""
+    letters = [c for c in text if c.isalpha()]
+    if not letters:
+        return False
+    if language.startswith("en"):
+        share = sum(c.isascii() for c in letters) / len(letters)
+    else:
+        rng = _SCRIPT_RANGES.get(language)
+        if rng is None:
+            return True                        # unknown code: don't fail the step
+        share = sum(rng[0] <= ord(c) <= rng[1] for c in letters) / len(letters)
+    return share >= 0.5
+
 
 class TestRun:
     def __init__(self, scenario: Scenario, *, api_key: str, get_record,
@@ -114,9 +140,16 @@ class TestRun:
     async def _run(self) -> None:
         self.state = "rendering"
         self._event("rendering caller voice (cached after first run)")
-        texts = [s.say for s in self.scenario.steps if s.say]
-        audio = await render_utterances(texts, self.scenario.language,
-                                        self.scenario.caller_voice, self.api_key)
+        # Steps may switch language mid-call (e.g. English -> Kannada); render
+        # each group in its own language so the tester really speaks it.
+        by_lang: dict[str, list[str]] = {}
+        for s in self.scenario.steps:
+            if s.say:
+                by_lang.setdefault(s.language or self.scenario.language, []).append(s.say)
+        audio: dict[str, bytes] = {}
+        for lang, texts in by_lang.items():
+            audio.update(await render_utterances(
+                texts, lang, self.scenario.caller_voice, self.api_key))
 
         loopback = None
         if self.transport == "pstn":
@@ -262,10 +295,30 @@ class TestRun:
             if best_i >= 0 and best_score >= 0.3:   # STT-garble tolerant
                 used.add(best_i)
                 answer = groups[best_i][1]
+                # A question spoken with a natural pause ("…English now. <pause>
+                # When was it founded?") splits into two user turns and the
+                # agent answers each — both replies belong to THIS step. Merge
+                # the next group when it matches the question's leftover tokens.
+                leftover = want - toks(groups[best_i][0])
+                j = best_i + 1
+                if (j < len(groups) and j not in used and leftover and
+                        len(leftover & toks(groups[j][0])) / len(leftover) >= 0.4):
+                    used.add(j)
+                    answer = f"{answer} {groups[j][1]}".strip()
                 row["answer"] = answer[:300]
-                step_keywords = next(
-                    (s.expect_keywords for s in self.scenario.steps
-                     if s.say == row["question"]), [])
-                if step_keywords:
-                    found = all(k.lower() in answer.lower() for k in step_keywords)
-                    row["check"] = "pass" if found else "fail"
+                step = next((s for s in self.scenario.steps
+                             if s.say == row["question"]), None)
+                if step is None:
+                    continue
+                checks: list[bool] = []
+                if step.expect_keywords:
+                    checks.append(all(k.lower() in answer.lower()
+                                      for k in step.expect_keywords))
+                if step.expect_language:
+                    ok = _script_matches(answer, step.expect_language)
+                    checks.append(ok)
+                    if not ok:
+                        self._event(f"answer not in expected language "
+                                    f"{step.expect_language}: {answer[:40]}")
+                if checks:
+                    row["check"] = "pass" if all(checks) else "fail"

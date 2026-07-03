@@ -21,6 +21,8 @@ class Step:
     await_full_answer: bool = True     # False -> next step fires while answer plays
     barge_in: bool = False             # speak OVER the current answer
     trigger_after_s: float = 0.8       # barge-in: how far into the answer
+    language: str = ""                 # per-step caller language ("" = scenario's)
+    expect_language: str = ""          # verify the ANSWER's script, e.g. "kn-IN"
 
     @classmethod
     def from_dict(cls, d: dict) -> "Step":

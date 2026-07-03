@@ -66,6 +66,30 @@ async def test_verify_matches_answers_and_checks():
     assert run.steps[1]["check"] == "fail"
 
 
+async def test_verify_merges_split_question_fragments():
+    # A pause mid-question splits it into two user turns; the agent answers
+    # each. Both replies belong to the one step.
+    record = CallRecord(call_id="c", agent_id="a", turns=[
+        Turn("user", "okay switch back to english now", 0.0),
+        Turn("assistant", "Of course. How can I help?", 1.0),
+        Turn("user", "when was cocolevio founded", 2.0),
+        Turn("assistant", "Cocolevio was founded in 2015.", 3.0),
+    ])
+    scenario = Scenario.from_dict({
+        "name": "v", "steps": [
+            {"say": "Okay, switch back to English now. When was Cocolevio founded?",
+             "expect_keywords": ["2015"], "expect_language": "en-IN"},
+        ]})
+
+    async def get_record(call_id, after_ts=0.0):
+        return record
+
+    run = TestRun(scenario, ws_url="ws://x", api_key="k", get_record=get_record)
+    await run._verify("c")
+    assert run.steps[0]["check"] == "pass"
+    assert "2015" in run.steps[0]["answer"]
+
+
 async def test_verify_handles_missing_record():
     run = _run_with_record(None)
     await run._verify("c")                     # no crash, checks stay "none"
