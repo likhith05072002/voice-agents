@@ -28,10 +28,8 @@ class Step:
     @classmethod
     def from_dict(cls, d: dict) -> "Step":
         if "barge_in_during_answer" in d:
-            return cls(say=d["barge_in_during_answer"], barge_in=True,
-                       trigger_after_s=d.get("trigger_after_s", 0.8),
-                       expect_keywords=d.get("expect_keywords", []),
-                       max_wait_s=d.get("max_wait_s", 12.0))
+            d = {**d, "say": d["barge_in_during_answer"], "barge_in": True}
+            d.pop("barge_in_during_answer")
         known = {f for f in cls.__dataclass_fields__}
         return cls(**{k: v for k, v in d.items() if k in known})
 
