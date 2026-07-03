@@ -59,6 +59,21 @@ def test_tokenizer_handles_native_script():
     assert _tokens("బంగారం ధర") == ["బంగారం", "ధర"]
 
 
+def test_cross_script_query_falls_back_to_whole_kb():
+    # A Devanagari query can never token-match English docs; an empty FACTS
+    # section made the live agent deny CocolevioHR existed. Whole-KB fallback.
+    kb = KnowledgeBase([
+        "Cocolevio is a technology consulting company in Austin.",
+        "Products: CocolevioHR, a recruitment automation product.",
+    ])
+    out = kb.retrieve("क्या आपके पास कोई एचआर प्रोडक्ट है?")
+    assert any("CocolevioHR" in d for d in out)
+    # English queries keep precise retrieval (no fallback flood)...
+    assert len(kb.retrieve("do you have an HR product?")) == 1
+    # ...and irrelevant English queries still inject nothing.
+    assert kb.retrieve("what is the weather like") == []
+
+
 # ─── iteration 5: engine integration ───
 
 import asyncio  # noqa: E402

@@ -747,7 +747,9 @@ class TurnEngine:
             # an ungrounded LLM invents fake companies (seen live: "VocalView").
             if self.knowledge.docs:
                 identity = self.knowledge.docs[0]
-                snippets = [identity] + [s for s in snippets if s != identity][:2]
+                # No hard cap beyond what retrieve() returns: the cross-script
+                # fallback deliberately returns the whole (budgeted) KB.
+                snippets = [identity] + [s for s in snippets if s != identity]
             if snippets:
                 sys_content += ("\n\nFACTS (answer from these — never invent or "
                                 "contradict them):\n- " + "\n- ".join(snippets))

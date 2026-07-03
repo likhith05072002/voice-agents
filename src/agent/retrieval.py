@@ -30,6 +30,13 @@ _STOPWORDS = frozenset({
 })
 
 
+def _mostly_non_latin(s: str) -> bool:
+    letters = [c for c in s if c.isalpha()]
+    if not letters:
+        return False
+    return sum(not c.isascii() for c in letters) / len(letters) > 0.5
+
+
 def _tokens(s: str) -> list[str]:
     out = []
     for w in s.lower().split():
@@ -61,9 +68,20 @@ class KnowledgeBase:
         # a shared stopword ("the", "on").
         self._default_idf = math.log(1 + n)
 
+    # Cross-script fallback budget: how much of the KB to inject verbatim when
+    # token matching is structurally impossible (see retrieve()).
+    _FALLBACK_CHARS = 1500
+
     def retrieve(self, query: str, *, k: int = 2, min_score: float = 0.15) -> list[str]:
         """Top-``k`` docs whose normalized IDF overlap with the query clears
-        ``min_score``. Empty list when nothing is relevant (no noise injected)."""
+        ``min_score``. Empty list when nothing is relevant (no noise injected).
+
+        Script-mismatch fallback: a Hindi/Kannada query can NEVER token-match an
+        English KB (zero overlap by construction), and an empty FACTS section
+        makes the model invent answers (live: denied CocolevioHR existed when
+        asked in Hindi). When the query is mostly non-Latin and nothing matched,
+        inject the whole KB up to a budget — receptionist KBs are dozens of
+        short facts, so this is cheap and always grounded."""
         q = set(_tokens(query))
         if not q:
             return []
@@ -76,7 +94,16 @@ class KnowledgeBase:
             score = sum(self._idf.get(t, 0.0) for t in overlap) / q_mass
             scored.append((score, doc))
         scored.sort(key=lambda x: x[0], reverse=True)
-        return [doc for score, doc in scored if score >= min_score][:k]
+        hits = [doc for score, doc in scored if score >= min_score][:k]
+        if not hits and _mostly_non_latin(query):
+            out, used = [], 0
+            for d in self.docs:
+                if used + len(d) > self._FALLBACK_CHARS:
+                    break
+                out.append(d)
+                used += len(d)
+            return out
+        return hits
 
 
 def build_demo_kb() -> KnowledgeBase:
