@@ -22,6 +22,7 @@ class Step:
     barge_in: bool = False             # speak OVER the current answer
     trigger_after_s: float = 0.8       # barge-in: how far into the answer
     language: str = ""                 # per-step caller language ("" = scenario's)
+    voice: str = ""                    # per-step caller voice ("" = scenario's)
     expect_language: str = ""          # verify the ANSWER's script, e.g. "kn-IN"
 
     @classmethod

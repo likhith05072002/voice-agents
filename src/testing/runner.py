@@ -140,16 +140,17 @@ class TestRun:
     async def _run(self) -> None:
         self.state = "rendering"
         self._event("rendering caller voice (cached after first run)")
-        # Steps may switch language mid-call (e.g. English -> Kannada); render
-        # each group in its own language so the tester really speaks it.
-        by_lang: dict[str, list[str]] = {}
+        # Steps may switch language/voice mid-call (e.g. English -> Hindi with
+        # a Hindi speaker); render each group with its own language and voice.
+        groups: dict[tuple[str, str], list[str]] = {}
         for s in self.scenario.steps:
             if s.say:
-                by_lang.setdefault(s.language or self.scenario.language, []).append(s.say)
+                key = (s.language or self.scenario.language,
+                       s.voice or self.scenario.caller_voice)
+                groups.setdefault(key, []).append(s.say)
         audio: dict[str, bytes] = {}
-        for lang, texts in by_lang.items():
-            audio.update(await render_utterances(
-                texts, lang, self.scenario.caller_voice, self.api_key))
+        for (lang, voice), texts in groups.items():
+            audio.update(await render_utterances(texts, lang, voice, self.api_key))
 
         loopback = None
         if self.transport == "pstn":

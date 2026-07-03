@@ -1,0 +1,36 @@
+{
+  "name": "hindi-switch",
+  "main_agent_id": "cocolevio",
+  "language": "en-IN",
+  "caller_voice": "abhilash",
+  "steps": [
+    {
+      "say": "Hello. Can you tell me what Cocolevio does?",
+      "expect_keywords": ["technology"],
+      "expect_language": "en-IN"
+    },
+    {
+      "say": "अब हम हिंदी में बात करते हैं। आपकी कंपनी की सेवाओं के बारे में बताइए।",
+      "language": "hi-IN",
+      "voice": "priya",
+      "expect_language": "hi-IN"
+    },
+    {
+      "say": "आपकी कंपनी कहाँ स्थित है?",
+      "language": "hi-IN",
+      "voice": "priya",
+      "expect_language": "hi-IN"
+    },
+    {
+      "say": "कंपनी की शुरुआत किस साल हुई थी?",
+      "language": "hi-IN",
+      "voice": "priya",
+      "expect_language": "hi-IN"
+    },
+    {
+      "say": "Okay, let's switch back to English now. When was Cocolevio founded?",
+      "expect_keywords": ["2015"],
+      "expect_language": "en-IN"
+    }
+  ]
+}
