@@ -1131,6 +1131,10 @@ class TurnEngine:
         await self.tts.send_text(text)
         await self.tts.flush()
         emitted = False
+        carry = b""     # partial frame carried ACROSS chunks — framing each
+        #                 chunk separately padded ~15 silence slivers into
+        #                 every answer (THE pat-pat-pat; this path serves
+        #                 tool-enabled agents, which is why only they had it)
         while True:
             try:
                 # 10s for synthesis to start; 2s inter-chunk gap = done.
@@ -1150,7 +1154,14 @@ class TurnEngine:
                 self._turn_metrics.mark("tts_first_audio")
             if self.state != State.SPEAKING:
                 self.state = State.SPEAKING
-            for frame in self._to_frames(audio):
+            data = carry + audio
+            usable = (len(data) // self._pcm_frame) * self._pcm_frame
+            carry = data[usable:]
+            for frame in self._to_frames(data[:usable]):
+                await self._playback_queue.put(frame)
+                emitted = True
+        if carry:                        # utterance tail: pad ONCE, at the end
+            for frame in self._to_frames(carry):
                 await self._playback_queue.put(frame)
                 emitted = True
         if emitted:
