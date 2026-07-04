@@ -1,0 +1,20 @@
+[Unit]
+Description=Cocolevio Voice Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/voice-agent
+EnvironmentFile=/home/pi/voice-agent/.env.production
+ExecStart=/home/pi/voice-agent/.venv/bin/python -m uvicorn src.main:app --host 127.0.0.1 --port 8001
+Restart=always
+RestartSec=3
+# Frame pacing is latency-critical: give the pump scheduler priority.
+Nice=-10
+# Don't let a leak take the Pi down.
+MemoryMax=4G
+
+[Install]
+WantedBy=multi-user.target

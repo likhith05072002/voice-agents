@@ -1,0 +1,18 @@
+# Cloudflare NAMED tunnel config — /etc/cloudflared/config.yml on the Pi.
+# Created once with:
+#   cloudflared tunnel login
+#   cloudflared tunnel create voice-agent
+#   cloudflared tunnel route dns voice-agent voice.YOURDOMAIN.com
+# Then installed as a service:  sudo cloudflared service install
+tunnel: voice-agent
+credentials-file: /home/pi/.cloudflared/voice-agent.json
+
+ingress:
+  - hostname: voice.YOURDOMAIN.com
+    service: http://127.0.0.1:8001
+    originRequest:
+      # WebSocket media streams are long-lived; never time them out mid-call.
+      noTLSVerify: true
+      keepAliveTimeout: 90s
+      tcpKeepAlive: 30s
+  - service: http_status:404
