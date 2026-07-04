@@ -6,6 +6,10 @@
 # Then installed as a service:  sudo cloudflared service install
 tunnel: voice-agent
 credentials-file: /home/pi/.cloudflared/voice-agent.json
+# quic beats http2 for tunneled websocket audio (UDP transport, less
+# head-of-line blocking); 4 HA connections ride out edge failovers.
+protocol: quic
+ha-connections: 4
 
 ingress:
   - hostname: voice.YOURDOMAIN.com

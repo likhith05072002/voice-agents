@@ -55,14 +55,19 @@ class SarvamTTSClient:
         if self._receive_task:
             self._receive_task.cancel()
         async def _open():
-            # Model is selected by URL query param — the WS ignores a "model"
-            # field in the config message and silently serves bulbul:v2 (which
-            # rejects v3-only speakers like ishita with a 400 per utterance).
+            # Model AND send_completion_event are URL query params — both are
+            # silently ignored in the config message (proven live; the ignored
+            # completion flag is why 25+ calls ran on the gap-timeout hack).
+            # With the URL param, {"event_type": "final"} arrives ~2ms after
+            # the last audio chunk. compression=None: permessage-deflate buys
+            # nothing on base64 audio and adds CPU + latency jitter.
             return await websockets.connect(
-                f"wss://api.sarvam.ai/text-to-speech/ws?model={quote(self.model)}",
+                f"wss://api.sarvam.ai/text-to-speech/ws?model={quote(self.model)}"
+                f"&send_completion_event=true",
                 additional_headers={"api-subscription-key": self.api_key},
                 ping_interval=20,
                 ping_timeout=10,
+                compression=None,
             )
 
         self._ws = await retry_async(
@@ -70,39 +75,54 @@ class SarvamTTSClient:
             on_retry=lambda a, e: logger.warning("tts.connect_retry", attempt=a, error=str(e)),
         )
 
-        config = {
-            "type": "config",
-            "data": {
-                "target_language_code": language,
-                "speaker": voice,
-                "speech_sample_rate": sample_rate,
-                "output_audio_codec": "linear16",
-                "send_completion_event": True,
-            },
-        }
-        await self._ws.send(json.dumps(config))
+        await self._send_config()
         self._receive_task = asyncio.create_task(self._receive_loop())
         self._first_audio_time = None
         logger.info("tts.connected", language=language, voice=voice, model=self.model)
+
+    async def _send_config(self) -> None:
+        await self._ws.send(json.dumps({
+            "type": "config",
+            "data": {
+                "target_language_code": self._language,
+                "speaker": self._voice,
+                "speech_sample_rate": self._sample_rate,
+                "output_audio_codec": "linear16",
+            },
+        }))
 
     def _needs_language_switch(self, language: str) -> bool:
         return bool(language) and language != self._language
 
     async def ensure_language(self, language: str) -> None:
-        """Switch the TTS language to match the caller mid-call (reconnects only
-        when it actually changes — Bulbul's language is fixed per config)."""
+        """Switch the TTS language to match the caller mid-call. A config
+        re-send on the OPEN socket switches cleanly (verified live: en->kn->en
+        on one socket, TTFA unchanged) — a full reconnect costs 150-400ms of
+        TLS+WS setup on the turn's critical path and is kept only as the
+        fallback for a dead socket."""
         if not self._needs_language_switch(language):
             return
-        logger.info("tts.language_switch", frm=self._language, to=language)
-        await self.connect(language=language, voice=self._voice, sample_rate=self._sample_rate)
+        self._language = language
+        if self.is_connected:
+            await self._send_config()
+            logger.info("tts.language_switch", to=language, inplace=True)
+        else:
+            await self.connect(language=language, voice=self._voice,
+                               sample_rate=self._sample_rate)
 
     async def set_voice(self, voice: str) -> None:
-        """Change the speaker for subsequent utterances (reconnects on change)."""
+        """Change the speaker for subsequent utterances (in-place on the open
+        socket; reconnect only if the socket is dead)."""
         if voice == self._voice:
             return
         if voice not in KNOWN_VOICES:
             logger.warning("tts.unknown_voice", voice=voice)
-        await self.connect(language=self._language, voice=voice, sample_rate=self._sample_rate)
+        self._voice = voice
+        if self.is_connected:
+            await self._send_config()
+        else:
+            await self.connect(language=self._language, voice=voice,
+                               sample_rate=self._sample_rate)
 
     async def send_text(self, text: str) -> None:
         if not self.is_connected:

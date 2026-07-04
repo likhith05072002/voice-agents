@@ -31,6 +31,19 @@ echo "    sudo mkdir -p /etc/cloudflared && sudo cp deploy/cloudflared-config.ym
 echo "    (edit hostname in /etc/cloudflared/config.yml)"
 echo "    sudo cloudflared service install && sudo systemctl enable --now cloudflared"
 
+echo "== 4.5/5 low-latency system knobs =="
+# performance governor: no frequency ramp-up latency on the 20ms frame pump
+sudo apt-get install -y -qq cpufrequtils
+echo 'GOVERNOR="performance"' | sudo tee /etc/default/cpufrequtils >/dev/null
+sudo systemctl restart cpufrequtils || true
+# network buffers + don't collapse cwnd on idle (bursty websocket audio)
+sudo tee /etc/sysctl.d/99-voice-agent.conf >/dev/null <<'SYS'
+net.core.rmem_max=8388608
+net.core.wmem_max=8388608
+net.ipv4.tcp_slow_start_after_idle=0
+SYS
+sudo sysctl -p /etc/sysctl.d/99-voice-agent.conf
+
 echo "== 5/5 voice-agent service =="
 sudo cp deploy/voice-agent.service /etc/systemd/system/
 sudo systemctl daemon-reload

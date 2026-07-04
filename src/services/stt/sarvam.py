@@ -13,6 +13,7 @@ import asyncio
 import base64
 import json
 import time
+from urllib.parse import urlencode
 from dataclasses import dataclass
 
 import structlog
@@ -48,7 +49,6 @@ class SarvamSTTClient:
         self._ws = None
         self._transcript_queue: asyncio.Queue[TranscriptEvent | VADEvent | None] = asyncio.Queue()
         self._receive_task = None
-        self._config_sent = False
         self._language = "te-IN"
         self._sample_rate = "16000"
         self._audio_buffer = b""
@@ -56,19 +56,39 @@ class SarvamSTTClient:
         # Smaller buffer -> faster VAD/barge-in signals, more websocket traffic.
         self._buffer_bytes = max(1, int(16000 * 2 * buffer_ms / 1000))
         self._seen_unhandled: set[str] = set()
+        # True once audio has been sent that no final transcript covers yet —
+        # the only time a flush is meaningful.
+        self._audio_since_final = False
 
     async def connect(self, language: str = "te-IN", sample_rate: int = 16000) -> None:
         self._language = language
         self._sample_rate = str(sample_rate)
-        self._config_sent = False
         self._audio_buffer = b""
+
+        # Config goes in URL QUERY PARAMS — the "config" block sent in the
+        # first audio message is silently IGNORED by the server (proven live:
+        # with body-config, language_code had no effect and vad_signals never
+        # produced events). language-code is deliberately "unknown" = auto-
+        # detect: a concrete code doesn't just lock the language, it makes
+        # saaras TRANSLATE (Kannada speech + en-IN => English text), which
+        # would silently break mid-call language switching.
+        # high_vad_sensitivity=false: eager mode splits utterances at breath
+        # pauses (measured); endpoint speed comes from flush() instead.
+        qs = urlencode({
+            "model": self.model,
+            "language-code": "unknown",
+            "sample_rate": self._sample_rate,
+            "high_vad_sensitivity": "false",
+            "vad_signals": "false",
+        })
 
         async def _open():
             return await websockets.connect(
-                "wss://api.sarvam.ai/speech-to-text/ws",
+                f"wss://api.sarvam.ai/speech-to-text/ws?{qs}",
                 additional_headers={"api-subscription-key": self.api_key},
                 ping_interval=20,
                 ping_timeout=10,
+                compression=None,   # deflate on base64 audio: CPU for nothing
             )
 
         # Retry transient connect failures (DNS/TLS/cold LB) rather than failing
@@ -94,6 +114,7 @@ class SarvamSTTClient:
 
         chunk = self._audio_buffer
         self._audio_buffer = b""
+        self._audio_since_final = True
 
         b64 = base64.b64encode(chunk).decode("ascii")
         audio_data = {
@@ -102,30 +123,28 @@ class SarvamSTTClient:
             "sample_rate": self._sample_rate,
         }
 
-        if not self._config_sent:
-            msg = {
-                "config": {
-                    "model": self.model,
-                    "language_code": self._language,
-                    "sample_rate": self._sample_rate,
-                    "vad_signals": True,
-                    "high_vad_sensitivity": self.high_vad_sensitivity,
-                },
-                "audio": audio_data,
-            }
-            self._config_sent = True
-        else:
-            msg = {"audio": audio_data}
+        # Config rides in the connect URL (see connect()); every message is
+        # audio-only. The old first-message config block was server-ignored.
+        msg = {"audio": audio_data}
 
         await self._ws.send(json.dumps(msg))
-        if self._config_sent and not hasattr(self, '_logged_send'):
+        if not hasattr(self, '_logged_send'):
             self._logged_send = True
             logger.info("stt.audio_sent", chunk_bytes=len(chunk), msg_keys=list(msg.keys()))
 
     async def flush(self) -> None:
-        """Send flush signal to get final transcript."""
-        if self._ws:
-            await self._ws.send(json.dumps({"type": "flush_signal"}))
+        """Force the pending segment to finalize NOW instead of waiting out
+        Sarvam's ~1s server-side silence detection.
+
+        Measured live (2026-07-04): natural endpoint ~1016ms after speech ends;
+        {"type": "flush"} returns the final in ~340-440ms, the stream stays
+        usable, and a mistimed flush just yields a fragment. (The old
+        "flush_signal" type was REJECTED with an error — never valid.)
+        Guarded so we only flush when there is un-finalized audio."""
+        if self._ws and self._audio_since_final:
+            self._audio_since_final = False
+            await self._ws.send(json.dumps({"type": "flush"}))
+            logger.info("stt.flushed")
 
     def inject_vad(self, is_speech_start: bool) -> None:
         """Feed a locally-detected VAD event into the event stream. Live calls
@@ -155,6 +174,7 @@ class SarvamSTTClient:
                 timestamp=time.perf_counter(),
             )
             if evt.text.strip():
+                self._audio_since_final = False   # this final covers sent audio
                 await self._transcript_queue.put(evt)
 
         elif msg_type == "events":

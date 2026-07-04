@@ -5,3 +5,4 @@ httpx==0.28.0
 structlog==24.4.0
 pydantic==2.9.0
 numpy==1.26.4
+uvloop==0.21.0; sys_platform != "win32"

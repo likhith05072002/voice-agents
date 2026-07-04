@@ -282,6 +282,14 @@ class TurnEngine:
                     # END_SPEECH: caller stopped -> anchor for STT-endpoint latency.
                     self._caller_speaking = False
                     self._last_speech_end = evt.timestamp
+                    # Force the STT segment to finalize NOW. Sarvam's own
+                    # endpointing waits ~1s of silence before emitting the
+                    # final; a flush returns it in ~350-450ms (measured), which
+                    # cuts both turn latency and barge-in confirmation time.
+                    # Safe: the stream survives, a mistimed flush just yields a
+                    # fragment, and the client no-ops when nothing is pending.
+                    if hasattr(self.stt, "flush"):
+                        asyncio.ensure_future(self._flush_stt())
                     # If we're mid-judgement and the caller's blip already ended
                     # with no transcript, it's most likely noise/backchannel —
                     # resume fast instead of sitting silent for false_timeout.
@@ -305,6 +313,12 @@ class TurnEngine:
                         await self._confirm_interrupt(txt)
                 else:
                     self._on_user_final(txt)
+
+    async def _flush_stt(self) -> None:
+        try:
+            await self.stt.flush()
+        except Exception as e:  # noqa: BLE001 — a failed flush must never kill the loop
+            logger.warning("stt.flush_failed", error=str(e))
 
     # ─── candidate interruption (pause -> judge -> resume or confirm) ───
 

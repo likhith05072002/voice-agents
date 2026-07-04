@@ -51,6 +51,16 @@ from src.testing.runner import TestRun
 structlog.configure(processors=[structlog.dev.ConsoleRenderer()])
 logger = structlog.get_logger()
 
+# uvloop: 2-4x faster event-loop primitives on Linux (the Raspberry Pi target).
+# Matters here because the 20ms frame pump + three websockets live or die on
+# scheduler latency. Windows dev boxes fall through to the default loop.
+try:
+    import uvloop
+    uvloop.install()
+    logger.info("uvloop.enabled")
+except ImportError:
+    pass
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Load persisted agents into the live store on boot.
