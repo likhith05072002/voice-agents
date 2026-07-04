@@ -808,6 +808,15 @@ async def media_stream(websocket: WebSocket):
                             # barge-in; the guard stack absorbs rare blips.
                             vad_active = True
                             stt.inject_vad(True)
+                        elif vad_active and quiet_run == 20:
+                            # Early endpoint hint at 400ms of quiet: force the
+                            # STT segment to finalize NOW (final lands ~350-450ms
+                            # later) WITHOUT firing VAD END — barge-in/resume
+                            # semantics keep the safer 600ms window below. If
+                            # this was only a mid-sentence breath, the fragment
+                            # is held and merged by smart endpointing
+                            # (looks_continuable), so nothing is answered early.
+                            asyncio.ensure_future(stt.flush())
                         elif vad_active and quiet_run >= 30:
                             # 600ms of quiet = the caller is really done. Humans
                             # breathe 300-500ms BETWEEN clauses mid-sentence; a
