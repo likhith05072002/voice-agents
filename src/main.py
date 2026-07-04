@@ -28,7 +28,7 @@ from src.audio.dsp import InboundDSP, EchoProfile
 from src.security.telnyx import verify_telnyx_signature
 from src.services.stt.sarvam import SarvamSTTClient
 from src.services.llm.sarvam import SarvamLLMClient
-from src.services.tts.sarvam import SarvamTTSClient
+from src.services.tts.sarvam import SarvamTTSClient, KNOWN_VOICES
 from src.pipeline.filler import FillerPlayer
 from src.util.ratelimit import TokenBucket, SessionLimiter
 from src.tenancy.agents import agent_from_settings
@@ -574,6 +574,43 @@ async def telnyx_webhook(request: Request):
     elif et == "call.hangup":
         _test_event(ccid, "📞 call hung up")
     return JSONResponse({"status": "ok"})
+
+
+# ─── Voice lab: A/B female voices by ear ───
+
+VOICE_LAB_CANDIDATES = ["ishita", "priya", "ritu", "neha", "kavya", "shreya",
+                        "simran", "tanya"]
+_VOICE_SAMPLE_TEXT = ("Hello! Thank you for calling Cocolevio, this is Ava. "
+                      "How can I help you today? "
+                      "ನಮ್ಮ ಕಂಪನಿ ಟೆಕ್ಸಾಸ್‌ನ ಆಸ್ಟಿನ್‌ನಲ್ಲಿ ನೆಲೆಸಿದೆ. "
+                      "हाँ, हम क्लाउड सेवाएँ भी प्रदान करते हैं।")
+
+
+@app.get("/voice-sample/{voice}")
+async def voice_sample(voice: str):
+    """One fixed multilingual sample line rendered in `voice` (REST, cached) —
+    lets a human pick the most natural voice by ear instead of by docs."""
+    from fastapi.responses import Response
+    from src.testing.caller import render_utterances
+    import io
+    import wave as _wave
+    if voice not in KNOWN_VOICES:
+        return JSONResponse({"error": f"unknown voice '{voice}'"}, status_code=404)
+    audio = await render_utterances([_VOICE_SAMPLE_TEXT], "en-IN", voice,
+                                    settings.sarvam_api_key)
+    pcm = audio[_VOICE_SAMPLE_TEXT]
+    buf = io.BytesIO()
+    with _wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(8000)
+        w.writeframes(pcm)
+    return Response(content=buf.getvalue(), media_type="audio/wav")
+
+
+@app.get("/voice-lab")
+async def voice_lab():
+    return {"voices": VOICE_LAB_CANDIDATES}
 
 
 # ─── Web call (browser mic <-> agent, no telephony) ───

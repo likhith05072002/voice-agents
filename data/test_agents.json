@@ -10,6 +10,7 @@
     "enable_rag": true,
     "knowledge_docs": [
       "Old gold exchange: accepted at the day's market rate minus a small refining charge.",
+      "Gold prices change every day with the market — always use the get_gold_price tool for today's rate; never quote a remembered price.",
       "All gold jewellery is BIS hallmarked and certified.",
       "Monthly gold savings scheme: pay eleven months, the shop adds the twelfth month free."
     ]

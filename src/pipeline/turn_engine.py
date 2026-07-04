@@ -231,6 +231,7 @@ class TurnEngine:
         self.reprompt_text = reprompt_text
         self.enable_language_switch = enable_language_switch
         self._caller_language = ""
+        self._lang_candidate = ""       # sticky-switch staging (see _track_language)
         self.knowledge = knowledge               # KnowledgeBase | None (RAG)
         self.router = router                     # AgentRouter | None (handoff)
         self.on_transcript = on_transcript       # Callable[[str, str], None] | None
@@ -355,18 +356,35 @@ class TurnEngine:
                 txt = evt.text.strip()
                 if not txt:
                     continue
-                if evt.language:
-                    self._caller_language = evt.language   # track for TTS switching
                 logger.info("stt.transcript", state=self.state.value,
                             lang=evt.language,
                             text=txt[:80].encode("ascii", "replace").decode())
                 if self._candidate:
+                    self._track_language(evt.language, txt)
                     await self._resolve_candidate(txt)
                 elif self.state in (State.SPEAKING, State.THINKING):
+                    self._track_language(evt.language, txt)
                     verdict = self._classify(txt)
                     if verdict in (Verdict.HARD, Verdict.REAL):
                         await self._confirm_interrupt(txt)
                 else:
+                    # LISTENING: junk gates BEFORE anything enters history.
+                    # Long calls degrade because the context window fills with
+                    # backchannels ("Hmm" as a full turn), mic noise, and the
+                    # agent's OWN voice echoed back as user turns — by turn ~20
+                    # the model is completing a garbage transcript and starts
+                    # echoing the caller (seen live: "…what is that?" answered
+                    # with " what is that?").
+                    if self._is_backchannel_only(txt):
+                        logger.info("listening.backchannel_ignored",
+                                    text=txt[:30].encode("ascii", "replace").decode())
+                        continue
+                    if self._looks_like_own_echo(txt):
+                        logger.info("listening.self_echo_dropped",
+                                    text=txt[:50].encode("ascii", "replace").decode())
+                        self._notify_false_recovery()   # let the echo profile adapt
+                        continue
+                    self._track_language(evt.language, txt)
                     self._on_user_final(txt)
 
     async def _flush_stt(self) -> None:
@@ -374,6 +392,44 @@ class TurnEngine:
             await self.stt.flush()
         except Exception as e:  # noqa: BLE001 — a failed flush must never kill the loop
             logger.warning("stt.flush_failed", error=str(e))
+
+    def _track_language(self, language: str, txt: str) -> None:
+        """Sticky language tracking: a one-word blip ("Hmm" labeled te-IN in a
+        Kannada call) must not flip the reply language. Switch on a confident
+        detection (>=3 words) or on two consecutive sightings."""
+        if not language or language == self._caller_language:
+            self._lang_candidate = ""
+            return
+        if (not self._caller_language              # first detection seeds freely
+                or len(txt.split()) >= 3 or language == self._lang_candidate):
+            self._caller_language = language
+            self._lang_candidate = ""
+        else:
+            self._lang_candidate = language
+
+    def _is_backchannel_only(self, txt: str) -> bool:
+        """"Hmm", "ok", "ಸರಿ" while LISTENING: acknowledgement, not a turn."""
+        from src.pipeline.barge_in import normalize
+        norm = normalize(txt)
+        if not norm or len(norm.split()) > 2:
+            return False
+        return norm in BACKCHANNELS or all(w in BACKCHANNELS for w in norm.split())
+
+    def _looks_like_own_echo(self, txt: str) -> bool:
+        """A 'user' final that is mostly words from the agent's last utterance
+        is our own voice leaking back (speakerphone / weak AEC). Answering it
+        creates a feedback loop that poisons the history."""
+        last = next((m["content"] for m in reversed(self.history)
+                     if m.get("role") == "assistant"), "")
+        if not last:
+            return False
+        words = [w.strip(".,?!।॥").lower() for w in txt.split()]
+        words = [w for w in words if len(w) > 2]
+        if len(words) < 3:
+            return False
+        tail = last[-400:].lower()
+        hits = sum(1 for w in words if w in tail)
+        return hits / len(words) >= 0.8
 
     # ─── candidate interruption (pause -> judge -> resume or confirm) ───
 

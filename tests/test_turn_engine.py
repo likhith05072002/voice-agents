@@ -441,3 +441,35 @@ def test_greeting_only_openers_detected():
     assert _is_greeting_only("ನಮಸ್ಕಾರ, ನಮ್ಮ ಕಂಪನಿ ಆಸ್ಟಿನ್‌ನಲ್ಲಿದೆ.") is False
     assert _is_greeting_only("We were founded in 2015.") is False
     assert _is_greeting_only("") is False
+
+
+def test_long_call_junk_gates():
+    """Backchannels, self-echo, and language blips must not pollute history."""
+    import asyncio
+    from src.pipeline.turn_engine import TurnEngine
+
+    class _N:  # bare fakes; we only exercise the pure helpers
+        pass
+
+    e = TurnEngine.__new__(TurnEngine)
+    e.history = [{"role": "assistant",
+                  "content": "We offer cloud migration and custom software development services."}]
+    e._caller_language = "kn-IN"
+    e._lang_candidate = ""
+    # backchannel-only finals
+    assert e._is_backchannel_only("Hmm") is True
+    assert e._is_backchannel_only("ok") is True
+    assert e._is_backchannel_only("ಸರಿ") is True
+    assert e._is_backchannel_only("ok tell me the price") is False
+    # self-echo: user final made of the agent's own words
+    assert e._looks_like_own_echo("cloud migration and custom software development") is True
+    assert e._looks_like_own_echo("what is the gold price today") is False
+    # sticky language: one-word blip doesn't flip; 3+ words or 2 sightings do
+    e._track_language("te-IN", "సరే")
+    assert e._caller_language == "kn-IN"
+    e._track_language("hi-IN", "अब हम हिंदी में बात करते हैं")
+    assert e._caller_language == "hi-IN"
+    e._track_language("en-IN", "ok")
+    assert e._caller_language == "hi-IN"
+    e._track_language("en-IN", "ok")          # second consecutive sighting
+    assert e._caller_language == "en-IN"

@@ -144,6 +144,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div id="events"></div>
   </section>
 
+  <section id="voicelab">
+    <h2>Voice lab <span class="muted">— same line, every candidate; pick by ear</span></h2>
+    <div id="voices" style="display:flex;flex-wrap:wrap;gap:10px"></div>
+  </section>
+
   <section>
     <h2>Recent calls <span class="muted">(auto-refresh)</span></h2>
     <table id="calls">
@@ -171,6 +176,12 @@ async function init() {
   $('#callAgent').innerHTML = opts;
   $('#webAgent').innerHTML = opts;
   $('#myNumber').value = localStorage.getItem('myNumber') || '';
+  const vl = await j('/voice-lab');
+  $('#voices').innerHTML = vl.voices.map(v => `
+    <div style="background:#1a2130;border-radius:10px;padding:10px 14px">
+      <div style="font-weight:700;margin-bottom:6px">${esc(v)}</div>
+      <audio controls preload="none" style="width:230px;margin:0"
+             src="/voice-sample/${esc(v)}"></audio></div>`).join('');
   refreshCalls(); setInterval(refreshCalls, 6000);
 }
 
