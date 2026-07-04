@@ -40,6 +40,82 @@ async def _live_spot_inr_per_gram() -> dict:
     return {"gold": gold24, "silver": silver}
 
 
+# INDIAN market rates (what jeweller boards actually quote): international
+# spot + import duty + local premium — measured ~15% above raw spot
+# conversion. Fetched from live Indian sources via a search-grounded model,
+# SANITY-CHECKED against spot (the search once returned silver below world
+# spot — impossible), cached 30 min, warmed in the background at call start
+# so no caller ever waits on the search.
+_india_cache: dict = {"t": 0.0, "gold_24k": 0.0, "gold_22k": 0.0, "silver": 0.0}
+_india_refreshing = False
+
+
+async def _refresh_india_rates() -> None:
+    global _india_refreshing
+    if _india_refreshing:
+        return
+    _india_refreshing = True
+    try:
+        import os
+        import re
+        import json as _json
+        import httpx
+        from src.config import settings
+        key = settings.openrouter_api_key or os.environ.get("OPENROUTER_API_KEY", "")
+        if not key:
+            return
+        spot = await _live_spot_inr_per_gram()
+        async with httpx.AsyncClient(timeout=25.0) as c:
+            r = await c.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={"Authorization": f"Bearer {key}"},
+                json={"model": "perplexity/sonar",
+                      "messages": [{"role": "user", "content":
+                          'What is today\'s gold rate in Hyderabad India per '
+                          'gram for 22 carat and 24 carat, and silver rate per '
+                          'gram in INR? Answer ONLY with JSON: {"gold_22k": N, '
+                          '"gold_24k": N, "silver": N} in INR per gram.'}],
+                      "max_tokens": 120})
+            r.raise_for_status()
+            txt = r.json()["choices"][0]["message"]["content"]
+        m = re.search(r"\{[^}]+\}", txt)
+        rates = _json.loads(m.group(0)) if m else {}
+
+        def _sane(web: float, spot_v: float) -> bool:
+            # Indian retail sits above spot (duty + premium), never far below.
+            return spot_v > 0 and 0.95 <= web / spot_v <= 1.45
+
+        g24 = float(rates.get("gold_24k") or 0)
+        g22 = float(rates.get("gold_22k") or 0)
+        ag = float(rates.get("silver") or 0)
+        upd = {}
+        if _sane(g24, spot["gold"]):
+            upd["gold_24k"] = g24
+            upd["gold_22k"] = g22 if _sane(g22, spot["gold"] * 22 / 24) else g24 * 22 / 24
+        if _sane(ag, spot["silver"]):
+            upd["silver"] = ag
+        if upd:
+            _india_cache.update(t=time.time(), **upd)
+            logger_note = {k: round(v) for k, v in upd.items()}
+            import structlog
+            structlog.get_logger().info("india_rates.refreshed", **logger_note)
+    except Exception:  # noqa: BLE001 — best-effort; spot fallback covers us
+        pass
+    finally:
+        _india_refreshing = False
+
+
+def warm_india_rates() -> None:
+    """Fire-and-forget refresh if the cache is stale — call at call start so
+    the rates are hot before the caller asks."""
+    import asyncio
+    if time.time() - _india_cache["t"] > 1800:
+        try:
+            asyncio.ensure_future(_refresh_india_rates())
+        except RuntimeError:
+            pass
+
+
 def build_demo_registry() -> ToolRegistry:
     reg = ToolRegistry()
 
@@ -70,21 +146,36 @@ def build_demo_registry() -> ToolRegistry:
             grams = float(args.get("grams", 1) or 1)
         except (TypeError, ValueError):
             grams = 1.0
-        try:
-            spot = await _live_spot_inr_per_gram()
-            base = spot[metal]
-            per_gram = base * (karat / 24) if metal == "gold" else base
-            source = "live market rate"
-        except Exception as e:  # noqa: BLE001 — a dead feed must not kill the turn
-            base = FALLBACK_GRAM_INR[metal]
-            per_gram = base * (karat / 24) if metal == "gold" else base
-            source = f"stale fallback (live feed unreachable: {e})"
+
+        warm_india_rates()               # keep the Indian-rate cache fresh
+        per_gram = None
+        # 1st choice: the INDIAN market rate — the number callers see on
+        # jeweller boards and rate apps (includes duty + local premium).
+        if time.time() - _india_cache["t"] < 7200:      # accept up to 2h old
+            if metal == "gold" and _india_cache["gold_24k"]:
+                base22, base24 = _india_cache["gold_22k"], _india_cache["gold_24k"]
+                per_gram = {22: base22, 24: base24}.get(karat, base24 * karat / 24)
+                source = "Indian market rate (live)"
+            elif metal == "silver" and _india_cache["silver"]:
+                per_gram = _india_cache["silver"]
+                source = "Indian market rate (live)"
+        if per_gram is None:
+            # 2nd: international spot converted to INR (~10-15% below boards).
+            try:
+                spot = await _live_spot_inr_per_gram()
+                base = spot[metal]
+                per_gram = base * (karat / 24) if metal == "gold" else base
+                source = "international spot rate (Indian retail runs a bit higher)"
+            except Exception as e:  # noqa: BLE001 — a dead feed must not kill the turn
+                base = FALLBACK_GRAM_INR[metal]
+                per_gram = base * (karat / 24) if metal == "gold" else base
+                source = f"stale fallback (live feeds unreachable: {e})"
         out = {"metal": metal,
                "price_per_gram_inr": round(per_gram),
                "grams": grams,
                "total_inr": round(per_gram * grams),
                "source": source,
-               "note": "spot market rate; retail adds GST and making charges"}
+               "note": "metal rate only; final bill adds making charges and GST"}
         if karat is not None:
             out["karat"] = karat
         return out

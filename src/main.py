@@ -45,6 +45,7 @@ from src.telephony.batch import BatchDialer
 from src.integrations.webhooks import post_event
 from src.agent.transfer import attach_transfer_tool
 from src.agent import kb_i18n
+from src.agent.demo_tools import warm_india_rates
 from src.testing.scenario import load_scenario, list_scenarios
 from src.testing.runner import TestRun
 
@@ -630,6 +631,7 @@ async def web_call(websocket: WebSocket):
     try:
         agent = _agent_store.resolve(agent_id=websocket.query_params.get("agent_id"))
         logger.info("webcall.started", agent=agent.agent_id)
+        warm_india_rates()               # rates hot before the caller asks
 
         stt = SarvamSTTClient(settings.sarvam_api_key, buffer_ms=100)
         await stt.connect(language=agent.language)
@@ -777,6 +779,7 @@ async def media_stream(websocket: WebSocket):
         # could reproduce).
         agent_id = info.get("agent_id") or _test_agent_override.get("agent_id")
         agent = (_agent_store.get(agent_id) if agent_id else None) or _agent_store.default()
+        warm_india_rates()               # rates hot before the caller asks
         logger.info("call.started", agent=agent.agent_id,
                     media_format=str(start_frame.get("start", {}).get("media_format", {})),
                     decoding="PCMA" if "PCMA" in (media_encoding or "PCMA").upper() else "PCMU")
