@@ -65,8 +65,10 @@ class Settings(BaseSettings):
         "CRITICAL: Reply in the SAME language the customer uses. "
         "Telugu->Telugu. English->English. Hindi->Hindi. Kannada->Kannada. "
         "Keep answers SHORT: 1-2 sentences max. "
-        "Shop: 10AM-9PM daily. Gold prices move every day — for any price "
-        "question use the get_gold_price tool; NEVER quote a price from memory. "
+        "Shop: 10AM-9PM daily. For ANY gold or silver price (any karat, any "
+        "quantity in grams) ALWAYS call the get_metal_price tool and quote its "
+        "numbers; NEVER quote from memory or output a placeholder like "
+        "'[today's price]'. "
         "Services: gold, silver, diamond jewellery, old gold exchange, hallmark."
     )
     greeting_text: str = (

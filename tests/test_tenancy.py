@@ -118,7 +118,7 @@ def test_catalog_builds_named_tool_set():
     from src.agent.catalog import build_tools
     reg = build_tools(["jewellery"])
     assert reg is not None
-    assert any(s["function"]["name"] == "get_gold_price" for s in reg.specs())
+    assert any(s["function"]["name"] == "get_metal_price" for s in reg.specs())
 
 
 def test_catalog_unknown_set_returns_none():

@@ -11,52 +11,83 @@ import time
 
 from src.agent.tools import ToolRegistry
 
-# Last-known prices — FALLBACK ONLY, served if the live feed is unreachable.
-GOLD_PRICE_INR = {24: 7800, 22: 7150, 18: 5850}
+TROY_OZ_G = 31.1035
 
-# Live spot cache: gold moves slowly enough that 15 minutes is fresh for a
-# shop conversation, and it keeps the tool instant on repeat questions.
-_gold_cache: dict = {"t": 0.0, "gram24": 0.0}
+# Last-known 24k gold / fine silver per-gram INR — FALLBACK ONLY, served if the
+# live feed is unreachable so the agent still gives a number, never a refusal.
+FALLBACK_GRAM_INR = {"gold": 11700, "silver": 168}
+
+# Spot cache: metals move slowly enough that 15 minutes is fresh for a shop
+# conversation, and it keeps the tool instant on repeat questions.
+_spot_cache: dict = {"t": 0.0, "gold24": 0.0, "silver": 0.0}
+
+# gold-api.com spot symbols.
+_SYMBOL = {"gold": "XAU", "silver": "XAG"}
 
 
-async def _live_gold_gram24_inr() -> float:
-    """Live 24k INR/gram from free keyless feeds (XAU USD/oz x USDINR)."""
-    if time.time() - _gold_cache["t"] < 900 and _gold_cache["gram24"]:
-        return _gold_cache["gram24"]
+async def _live_spot_inr_per_gram() -> dict:
+    """Live 24k gold + fine silver, INR per gram, from free keyless feeds."""
+    if time.time() - _spot_cache["t"] < 900 and _spot_cache["gold24"]:
+        return {"gold": _spot_cache["gold24"], "silver": _spot_cache["silver"]}
     import httpx
     async with httpx.AsyncClient(timeout=6.0) as c:
-        xau_usd_oz = (await c.get("https://api.gold-api.com/price/XAU")).json()["price"]
+        xau = (await c.get("https://api.gold-api.com/price/XAU")).json()["price"]
+        xag = (await c.get("https://api.gold-api.com/price/XAG")).json()["price"]
         usd_inr = (await c.get("https://open.er-api.com/v6/latest/USD")).json()["rates"]["INR"]
-    gram24 = xau_usd_oz / 31.1035 * usd_inr
-    _gold_cache.update(t=time.time(), gram24=gram24)
-    return gram24
+    gold24 = xau / TROY_OZ_G * usd_inr
+    silver = xag / TROY_OZ_G * usd_inr
+    _spot_cache.update(t=time.time(), gold24=gold24, silver=silver)
+    return {"gold": gold24, "silver": silver}
 
 
 def build_demo_registry() -> ToolRegistry:
     reg = ToolRegistry()
 
     @reg.tool(
-        "get_gold_price",
-        "Get today's LIVE gold market price per gram in INR for a given karat.",
+        "get_metal_price",
+        "Get today's LIVE market price in INR for gold or silver. Handles any "
+        "quantity in grams and gold karat purity, and returns both the "
+        "per-gram rate and the total for the requested quantity. Call this for "
+        "ANY gold or silver price question — never quote a price from memory.",
         {
             "type": "object",
-            "properties": {"karat": {"type": "integer", "enum": [18, 22, 24]}},
-            "required": ["karat"],
+            "properties": {
+                "metal": {"type": "string", "enum": ["gold", "silver"]},
+                "karat": {"type": "integer", "enum": [18, 22, 24],
+                          "description": "gold purity; ignored for silver"},
+                "grams": {"type": "number",
+                          "description": "quantity in grams (default 1)"},
+            },
+            "required": ["metal"],
         },
     )
-    async def get_gold_price(args: dict) -> dict:
-        karat = int(args.get("karat", 22))
+    async def get_metal_price(args: dict) -> dict:
+        metal = str(args.get("metal", "gold")).lower()
+        if metal not in _SYMBOL:
+            return {"error": f"unknown metal '{metal}'; we quote gold or silver"}
+        karat = int(args.get("karat", 22)) if metal == "gold" else None
         try:
-            gram24 = await _live_gold_gram24_inr()
-            return {"karat": karat,
-                    "price_per_gram_inr": round(gram24 * karat / 24),
-                    "source": "live market rate",
-                    "note": "spot market rate; retail adds GST and making charges"}
+            grams = float(args.get("grams", 1) or 1)
+        except (TypeError, ValueError):
+            grams = 1.0
+        try:
+            spot = await _live_spot_inr_per_gram()
+            base = spot[metal]
+            per_gram = base * (karat / 24) if metal == "gold" else base
+            source = "live market rate"
         except Exception as e:  # noqa: BLE001 — a dead feed must not kill the turn
-            return {"karat": karat,
-                    "price_per_gram_inr": GOLD_PRICE_INR.get(karat, GOLD_PRICE_INR[22]),
-                    "source": "stale fallback (live feed unreachable)",
-                    "error": str(e)}
+            base = FALLBACK_GRAM_INR[metal]
+            per_gram = base * (karat / 24) if metal == "gold" else base
+            source = f"stale fallback (live feed unreachable: {e})"
+        out = {"metal": metal,
+               "price_per_gram_inr": round(per_gram),
+               "grams": grams,
+               "total_inr": round(per_gram * grams),
+               "source": source,
+               "note": "spot market rate; retail adds GST and making charges"}
+        if karat is not None:
+            out["karat"] = karat
+        return out
 
     @reg.tool(
         "get_shop_hours",
