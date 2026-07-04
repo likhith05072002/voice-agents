@@ -107,6 +107,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <span class="muted" id="callmestate"></span>
   </div>
 
+  <div class="controls" style="border-color:#3a2b3a">
+    <span style="font-weight:700">🎧 Live Call (browser)</span>
+    <select id="webAgent"></select>
+    <button id="webcall" onclick="webCall()"
+      style="background:#8957e5">🎧 Start Live Call</button>
+    <span class="muted" id="webstate">talk to the agent through this page — mic + speakers</span>
+  </div>
+
   <div class="call">
     <div class="phone tester" id="phoneT">
       <div class="avatar">🤖</div>
@@ -158,8 +166,10 @@ async function init() {
   const s = await j('/test/scenarios');
   $('#scenario').innerHTML = s.scenarios.map(n => `<option>${n}</option>`).join('');
   const a = await j('/agents-lite');
-  $('#callAgent').innerHTML = a.agents.map(x =>
+  const opts = a.agents.map(x =>
     `<option value="${esc(x.agent_id)}">${esc(x.name)}</option>`).join('');
+  $('#callAgent').innerHTML = opts;
+  $('#webAgent').innerHTML = opts;
   $('#myNumber').value = localStorage.getItem('myNumber') || '';
   refreshCalls(); setInterval(refreshCalls, 6000);
 }
@@ -221,6 +231,76 @@ function bubble(pane, who, text) {
   el.innerHTML = `<div class="who">${who}</div>${esc(text)}`;
   pane.appendChild(el);
   pane.scrollTop = 1e9;
+}
+
+/* ── Live browser call: mic -> /web-call -> speakers ── */
+let webWS = null, webCtx = null, webProc = null, webStream = null, webPlayT = 0;
+
+async function webCall() {
+  if (webWS) { stopWebCall('ended'); return; }
+  try {
+    webStream = await navigator.mediaDevices.getUserMedia({audio: {
+      echoCancellation: true, noiseSuppression: true, autoGainControl: true}});
+  } catch (e) { $('#webstate').textContent = '❌ mic permission denied'; return; }
+  webCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const src = webCtx.createMediaStreamSource(webStream);
+  webProc = webCtx.createScriptProcessor(4096, 1, 1);
+  const ratio = webCtx.sampleRate / 16000;
+  webPlayT = 0;
+  webWS = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') +
+    location.host + '/web-call?agent_id=' + encodeURIComponent($('#webAgent').value));
+  webWS.binaryType = 'arraybuffer';
+  webWS.onopen = () => {
+    $('#webstate').innerHTML = '<span class="live-dot"></span>LIVE — just speak';
+    $('#webcall').textContent = '■ End Call';
+    $('#webcall').style.background = '#da3633';
+    $('#phoneT').querySelector('h3').textContent = 'You';
+    $('#phoneT').querySelector('.num').textContent = 'browser mic · live';
+    $('#talkT').innerHTML = ''; $('#talkA').innerHTML = '';
+    $('#linklbl').textContent = 'LIVE BROWSER CALL';
+  };
+  webWS.onclose = () => { if (webWS) stopWebCall('connection closed'); };
+  webWS.onmessage = e => {
+    if (typeof e.data === 'string') {
+      const m = JSON.parse(e.data);
+      if (m.role === 'user') { bubble($('#talkT'), 'you say', m.text); flash('#phoneT'); }
+      else { bubble($('#talkA'), 'says', m.text); flash('#phoneA'); }
+      return;
+    }
+    const i16 = new Int16Array(e.data);
+    const buf = webCtx.createBuffer(1, i16.length, 8000);
+    const ch = buf.getChannelData(0);
+    for (let i = 0; i < i16.length; i++) ch[i] = i16[i] / 32768;
+    const s = webCtx.createBufferSource();
+    s.buffer = buf; s.connect(webCtx.destination);
+    if (webPlayT < webCtx.currentTime + 0.05) webPlayT = webCtx.currentTime + 0.08;
+    s.start(webPlayT); webPlayT += buf.duration;
+  };
+  webProc.onaudioprocess = ev => {
+    if (!webWS || webWS.readyState !== 1) return;
+    const inp = ev.inputBuffer.getChannelData(0);
+    const out = new Int16Array(Math.floor(inp.length / ratio));
+    for (let i = 0; i < out.length; i++) {
+      const v = inp[Math.floor(i * ratio)];
+      out[i] = Math.max(-32768, Math.min(32767, v * 32768));
+    }
+    webWS.send(out.buffer);
+  };
+  src.connect(webProc);
+  const mute = webCtx.createGain(); mute.gain.value = 0;   // keep node alive, no echo
+  webProc.connect(mute); mute.connect(webCtx.destination);
+}
+
+function stopWebCall(why) {
+  const ws = webWS; webWS = null;
+  if (ws && ws.readyState <= 1) ws.close();
+  if (webStream) { webStream.getTracks().forEach(t => t.stop()); webStream = null; }
+  if (webCtx) { webCtx.close(); webCtx = null; }
+  webProc = null;
+  $('#webcall').textContent = '🎧 Start Live Call';
+  $('#webcall').style.background = '#8957e5';
+  $('#webstate').textContent = '✅ ' + why;
+  $('#linklbl').textContent = 'idle';
 }
 
 async function startTest() {

@@ -576,6 +576,102 @@ async def telnyx_webhook(request: Request):
     return JSONResponse({"status": "ok"})
 
 
+# ─── Web call (browser mic <-> agent, no telephony) ───
+
+@app.websocket("/web-call")
+async def web_call(websocket: WebSocket):
+    """Live call from the dashboard: browser sends raw PCM16 mono 16kHz binary
+    frames; we send back PCM16 mono 8kHz binary audio + JSON text frames
+    ({role, text}) for the live transcript. No carrier, no tunnel audio cost —
+    and STT gets true 16kHz wideband instead of phone-narrowband."""
+    await websocket.accept()
+    if not _sessions.try_acquire():
+        await websocket.close(code=1013)
+        return
+
+    stt = llm = tts = engine = engine_task = None
+    try:
+        agent = _agent_store.resolve(agent_id=websocket.query_params.get("agent_id"))
+        logger.info("webcall.started", agent=agent.agent_id)
+
+        stt = SarvamSTTClient(settings.sarvam_api_key, buffer_ms=100)
+        await stt.connect(language=agent.language)
+        llm = SarvamLLMClient(settings.sarvam_api_key,
+                              model=agent.llm_model or settings.sarvam_llm_model)
+        tts = SarvamTTSClient(settings.sarvam_api_key, model=settings.sarvam_tts_model)
+        await tts.connect(language=agent.language, voice=agent.voice, sample_rate="8000")
+
+        async def send_media(frame: bytes) -> None:
+            # engine emits mu-law 8k frames; browser wants linear PCM16
+            await websocket.send_bytes(audioop.ulaw2lin(frame, 2))
+
+        def transcript_sink(role: str, text: str) -> None:
+            logger.info("transcript", agent=agent.agent_id, role=role,
+                        text=text[:200].encode("ascii", "replace").decode())
+            payload = json.dumps({"role": role, "text": text})
+            asyncio.ensure_future(websocket.send_text(payload))
+
+        engine = build_engine(
+            agent, stt=stt, llm=llm, tts=tts, send_media=send_media,
+            on_transcript=transcript_sink,
+            idle_reprompt_s=settings.idle_reprompt_ms / 1000,
+            idle_hangup_s=settings.idle_hangup_ms / 1000,
+            instant_pause=True,          # browser AEC keeps the mic echo-free
+        )
+        engine_task = asyncio.create_task(engine.run())
+
+        # Reader: browser PCM16-16k -> local VAD (20ms frames) + STT.
+        FRAME16 = 640                    # 20ms of PCM16 @16k
+        buf = b""
+        loud_run = quiet_run = 0
+        vad_active = False
+        THRESH = 500                     # browser-AEC'd mic: fixed floor works
+        while True:
+            msg = await websocket.receive()
+            if msg.get("type") == "websocket.disconnect":
+                break
+            data = msg.get("bytes")
+            if not data:
+                continue
+            buf += data
+            while len(buf) >= FRAME16:
+                frame, buf = buf[:FRAME16], buf[FRAME16:]
+                if audioop.rms(frame, 2) > THRESH:
+                    loud_run += 1
+                    quiet_run = 0
+                else:
+                    quiet_run += 1
+                    loud_run = 0
+                if not vad_active and loud_run >= 2:
+                    vad_active = True
+                    stt.inject_vad(True)
+                elif vad_active and quiet_run == 20:
+                    asyncio.ensure_future(stt.flush())   # early endpoint hint
+                elif vad_active and quiet_run >= 30:
+                    vad_active = False
+                    stt.inject_vad(False)
+            await stt.send_audio(data)
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:  # noqa: BLE001
+        logger.error("webcall.error", error=str(e))
+    finally:
+        if engine_task is not None:
+            engine_task.cancel()
+            try:
+                await engine_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+        for client in (stt, tts, llm):
+            if client is not None:
+                try:
+                    await client.close()
+                except Exception:  # noqa: BLE001
+                    pass
+        _sessions.release()
+        logger.info("webcall.ended")
+
+
 # ─── Media stream ───
 
 @app.websocket("/media-stream")
