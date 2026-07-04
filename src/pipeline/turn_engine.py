@@ -663,7 +663,7 @@ class TurnEngine:
         await self.tts.reset()
         full = ""
         first = True
-        retried = False
+        retries = 0
         try:
             while True:
                 evt = await sentence_queue.get()
@@ -672,12 +672,15 @@ class TurnEngine:
                 if isinstance(evt, SentenceEvent):
                     tl.mark("llm_first_token")
                     # Language guard: verify the FIRST sentence is in the
-                    # caller's language BEFORE any of it reaches TTS; one
-                    # regenerate with a blunt corrective. Nothing wrong-language
-                    # is ever spoken; cost is one extra TTFT only on violation.
-                    if first and not retried and self._wrong_language(evt.text):
+                    # caller's language BEFORE any of it reaches TTS. Retry 1:
+                    # blunt corrective appended. Retry 2: strip conversation
+                    # history entirely — several turns of another language beat
+                    # a corrective (seen live: English question after three
+                    # Kannada exchanges got Kannada twice), but system+question
+                    # alone follows the directive reliably.
+                    if first and retries < 2 and self._wrong_language(evt.text):
                         lang = LANGUAGE_NAMES.get(self._caller_language, "")
-                        logger.warning("language.guard_retry", want=lang,
+                        logger.warning("language.guard_retry", want=lang, n=retries + 1,
                                        got=evt.text[:40].encode("ascii", "replace").decode())
                         self.llm.cancel()
                         llm_task.cancel()
@@ -686,15 +689,22 @@ class TurnEngine:
                         except (asyncio.CancelledError, Exception):
                             pass
                         sentence_queue = asyncio.Queue()
-                        messages = messages + [{
+                        corrective = {
                             "role": "system",
                             "content": (f"STOP. That reply was not in {lang}. "
                                         f"Rewrite your ENTIRE answer strictly in "
                                         f"{lang} (native script). Do not use any "
-                                        f"other language.")}]
+                                        f"other language.")}
+                        if retries == 0:
+                            messages = messages + [corrective]
+                        else:
+                            last_user = next((m for m in reversed(messages)
+                                              if m["role"] == "user"), None)
+                            messages = [messages[0]] + \
+                                ([last_user] if last_user else []) + [corrective]
                         llm_task = asyncio.create_task(
                             self.llm.generate_sentences(messages, sentence_queue))
-                        retried = True
+                        retries += 1
                         continue
                     first = False
                     text, blocked = self._guard(evt.text, active_prompt)
