@@ -76,6 +76,42 @@ _SCRIPT_BLOCKS = {
 
 _END = object()  # end-of-utterance marker on the playback queue
 
+def _join_dotted_abbreviations(text: str) -> str:
+    """Models spell abbreviations with dots ("एच. आर.", "ಯು.ಎಕ್ಸ್.") and TTS
+    reads them as halting letter-by-letter fragments. Two conservative fixes,
+    Indic-focused (where the problem manifests; Latin is left alone so real
+    sentence boundaries like "done. Ok." can't be eaten):
+      1. collapse dots INSIDE a dotted token: "ಯು.ಎಕ್ಸ್." -> "ಯುಎಕ್ಸ್"
+      2. merge a dotted token with following 1-2-letter dotted Indic tokens:
+         "कोकोलेवियोएच. आर. नाम" -> "कोकोलेवियोएचआर नाम"."""
+    def _core(w: str) -> str:
+        return w.rstrip(".").replace(".", "")
+
+    def _short_indic_dotted(w: str) -> bool:
+        c = _core(w)
+        return (w.endswith(".") and 1 <= len(c) <= 2
+                and all(not ch.isascii() for ch in c if ch.isalpha()))
+
+    toks = text.split(" ")
+    out: list[str] = []
+    i = 0
+    while i < len(toks):
+        w = toks[i]
+        if w.endswith(".") and i + 1 < len(toks) and _short_indic_dotted(toks[i + 1]):
+            merged = _core(w)
+            i += 1
+            while i < len(toks) and _short_indic_dotted(toks[i]):
+                merged += _core(toks[i])
+                i += 1
+            out.append(merged)
+            continue
+        if w.endswith(".") and "." in w[:-1] and not w[:-1].replace(".", "").isascii():
+            w = _core(w)                      # internal-dot Indic abbreviation
+        out.append(w)
+        i += 1
+    return " ".join(out)
+
+
 # One 20ms frame of mu-law digital silence. Sent whenever we have nothing to
 # say: a stream that stops between utterances makes the carrier's comfort-noise
 # generator toggle at every sentence edge, which callers hear as soft thumps
@@ -745,6 +781,7 @@ class TurnEngine:
 
     async def _feed_tts(self, text: str, pending: asyncio.Queue) -> None:
         """Send one sentence to TTS immediately (no waiting for prior audio)."""
+        text = _join_dotted_abbreviations(text)
         self._emit_transcript("assistant", text)
         await self.tts.send_text(text)
         await self.tts.flush()

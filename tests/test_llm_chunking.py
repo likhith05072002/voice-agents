@@ -74,3 +74,10 @@ def test_dotted_abbreviations_do_not_split_any_script():
     assert _flush_boundary("हमारे पास यू.आई.", is_first=False) is False
     # real sentence ends still split
     assert _flush_boundary("We are based in Austin, Texas.", is_first=False) is True
+
+
+def test_dotted_letter_runs_joined_before_tts():
+    from src.pipeline.turn_engine import _join_dotted_abbreviations as j
+    assert "एच. आर." not in j("कोकोलेवियोएच. आर. नाम का उत्पाद")
+    assert j("Normal sentence stays. Second sentence too.") == \
+        "Normal sentence stays. Second sentence too."
