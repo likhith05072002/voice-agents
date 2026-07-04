@@ -1193,9 +1193,16 @@ class TurnEngine:
                     item = self._playback_queue.get_nowait()
                 except asyncio.QueueEmpty:
                     if mid_sentence:
-                        underruns += 1           # caller hears a mid-word gap here
-                    item = self._silence_frame   # keep the RTP stream warm
-                    is_fill = True
+                        # NEVER inject silence INSIDE speech: a late TTS chunk
+                        # with silence stuffed before it is heard as a break in
+                        # the word. Wait for the audio; the deadline pacer's
+                        # catch-up absorbs the slip. (Silence-fill mid-speech
+                        # was itself heard live as "small gaps / voice breaks".)
+                        underruns += 1
+                        item = await self._playback_queue.get()
+                    else:
+                        item = self._silence_frame   # keep the RTP stream warm
+                        is_fill = True
             else:
                 item = await self._playback_queue.get()
             if item is _END:

@@ -491,3 +491,46 @@ def test_pcm16_wideband_framing():
     e.frame_bytes, e._pcm_frame = 160, 320
     frames = e._to_frames(b"\x01\x00" * 200)     # 400B pcm -> 200B ulaw
     assert len(frames) == 2 and all(len(f) == 160 for f in frames)
+
+
+async def test_pump_never_fills_silence_mid_sentence():
+    """TTS starvation inside a sentence must WAIT for audio, not insert
+    silence (silence-fill mid-speech was heard live as voice breaks)."""
+    import asyncio
+    from src.pipeline.turn_engine import TurnEngine, _SpokenMark
+
+    e = TurnEngine.__new__(TurnEngine)
+    e._playback_queue = asyncio.Queue()
+    e._pump_gate = asyncio.Event(); e._pump_gate.set()
+    e._turn_done = asyncio.Event()
+    e.frame_pace_s = 0.001
+    e.pace_lead_s = 0.0
+    e.sample_rate, e.codec = 8000, "mulaw"
+    e.frame_bytes, e._pcm_frame = 160, 320
+    e._silence_frame = b"\xff" * 160
+    e._turn_metrics = None
+    e._spoken = ""
+    e.tap = None
+    sent = []
+    async def send(f): sent.append(bytes(f))
+    e.send_media = send
+
+    pump = asyncio.create_task(e._playback_pump())
+    speech = b"\x01" * 160
+    await e._playback_queue.put(speech)          # sentence starts
+    await asyncio.sleep(0.05)                    # queue now EMPTY mid-sentence
+    await e._playback_queue.put(speech)          # late chunk arrives
+    await e._playback_queue.put(_SpokenMark("x"))
+    await asyncio.sleep(0.05)                    # sentence done -> fill allowed
+    pump.cancel()
+    try:
+        await pump
+    except asyncio.CancelledError:
+        pass
+    # between the two speech frames there must be NO silence frame
+    idx = [i for i, f in enumerate(sent) if f == speech]
+    assert len(idx) >= 2
+    between = sent[idx[0] + 1:idx[1]]
+    assert all(f != e._silence_frame for f in between), "silence injected mid-sentence"
+    # after the mark, keep-warm fill resumes
+    assert any(f == e._silence_frame for f in sent[idx[1]:])

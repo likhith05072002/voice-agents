@@ -287,10 +287,12 @@ async function webCall() {
     s.buffer = buf; s.connect(webCtx.destination);
     // Accumulating float durations drifts by sub-sample amounts and clicks at
     // chunk joins; deriving each start time from the TOTAL SAMPLE COUNT keeps
-    // every chunk sample-adjacent forever.
+    // every chunk sample-adjacent forever. The 250ms cushion is the jitter
+    // buffer: wifi/main-thread hiccups smaller than it are inaudible, and a
+    // re-anchor (an audible gap) only happens on a genuine stall.
     let t = webEpoch + webSamples / 16000;
-    if (t < webCtx.currentTime + 0.03) {
-      webEpoch = webCtx.currentTime + 0.1;      // (re)anchor after underrun
+    if (t < webCtx.currentTime + 0.02) {
+      webEpoch = webCtx.currentTime + 0.25;     // (re)anchor after a real stall
       webSamples = 0;
       t = webEpoch;
     }
