@@ -31,9 +31,13 @@ class SarvamTTSClient:
     Outputs mulaw 8kHz audio — ready for telephony with zero resampling.
     """
 
-    def __init__(self, api_key: str, model: str = "bulbul:v2"):
+    def __init__(self, api_key: str, model: str = "bulbul:v2",
+                 pace: float = 1.0):
         self.api_key = api_key
         self.model = model
+        # Speaking speed, 0.5-2.0 (verified honored over the WS; slight slow-
+        # down ~0.95 tends to read as calmer/more human for receptionists).
+        self.pace = pace
         self._ws = None
         self._audio_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
         self._receive_task = None
@@ -86,15 +90,15 @@ class SarvamTTSClient:
         logger.info("tts.connected", language=language, voice=voice, model=self.model)
 
     async def _send_config(self) -> None:
-        await self._ws.send(json.dumps({
-            "type": "config",
-            "data": {
-                "target_language_code": self._language,
-                "speaker": self._voice,
-                "speech_sample_rate": self._sample_rate,
-                "output_audio_codec": "linear16",
-            },
-        }))
+        data = {
+            "target_language_code": self._language,
+            "speaker": self._voice,
+            "speech_sample_rate": self._sample_rate,
+            "output_audio_codec": "linear16",
+        }
+        if self.pace and abs(self.pace - 1.0) > 1e-3:
+            data["pace"] = self.pace
+        await self._ws.send(json.dumps({"type": "config", "data": data}))
 
     def _needs_language_switch(self, language: str) -> bool:
         return bool(language) and language != self._language

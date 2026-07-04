@@ -473,3 +473,21 @@ def test_long_call_junk_gates():
     assert e._caller_language == "hi-IN"
     e._track_language("en-IN", "ok")          # second consecutive sighting
     assert e._caller_language == "en-IN"
+
+
+def test_pcm16_wideband_framing():
+    """Web channel: 16k PCM16 codec — 20ms frames are 640B, zero-padded,
+    never mu-law encoded."""
+    from src.pipeline.turn_engine import TurnEngine
+    e = TurnEngine.__new__(TurnEngine)
+    e.sample_rate, e.codec = 16000, "pcm16"
+    e.frame_bytes, e._pcm_frame = 640, 640
+    frames = e._to_frames(b"\x01\x00" * 500)     # 1000 bytes -> 640 + 360(pad)
+    assert len(frames) == 2
+    assert len(frames[0]) == 640 and len(frames[1]) == 640
+    assert frames[1].endswith(b"\x00" * 280)
+    # telephony path unchanged
+    e.sample_rate, e.codec = 8000, "mulaw"
+    e.frame_bytes, e._pcm_frame = 160, 320
+    frames = e._to_frames(b"\x01\x00" * 200)     # 400B pcm -> 200B ulaw
+    assert len(frames) == 2 and all(len(f) == 160 for f in frames)

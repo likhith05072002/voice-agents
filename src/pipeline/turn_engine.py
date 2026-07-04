@@ -167,6 +167,8 @@ class TurnEngine:
         enable_fillers: bool = False,
         frame_pace_s: float = FRAME_PACE_S,
         pace_lead_s: float = 0.08,
+        sample_rate: int = 8000,
+        codec: str = "mulaw",          # "mulaw" (telephony) | "pcm16" (web/app)
         min_words: int = 2,
         false_timeout_s: float = 1.2,
         speech_end_grace_s: float = 0.3,
@@ -204,6 +206,15 @@ class TurnEngine:
         # Cushion of audio kept queued at the carrier (absorbs event-loop
         # jitter; costs the same amount of extra tail on a barge-in pause).
         self.pace_lead_s = pace_lead_s
+        # Audio format: telephony runs mulaw@8k; the web/app channel runs raw
+        # PCM16 at 16k+ (bulbul synthesizes natively at 24k — 8k narrowband
+        # throws away most of the voice quality).
+        self.sample_rate = sample_rate
+        self.codec = codec
+        samples_per_frame = sample_rate // 50            # 20ms frames
+        self.frame_bytes = samples_per_frame * (1 if codec == "mulaw" else 2)
+        self._pcm_frame = samples_per_frame * 2          # PCM16 in per frame
+        self._silence_frame = (b"\xff" if codec == "mulaw" else b"\x00") * self.frame_bytes
         # Debug tap: set to a bytearray to capture every frame actually sent
         # (lets a recording of what WE sent be diffed against what arrived).
         self.tap: bytearray | None = None
@@ -914,7 +925,7 @@ class TurnEngine:
                 if self.state != State.SPEAKING:
                     self.state = State.SPEAKING
                 data = carry + audio
-                usable = (len(data) // (FRAME_BYTES * 2)) * (FRAME_BYTES * 2)
+                usable = (len(data) // self._pcm_frame) * self._pcm_frame
                 carry = data[usable:]
                 for frame in self._to_frames(data[:usable]):
                     await self._playback_queue.put(frame)
@@ -1079,17 +1090,20 @@ class TurnEngine:
         await self._playback_queue.put(_END)
         await self._turn_done.wait()
 
-    @staticmethod
-    def _to_frames(pcm16_8k: bytes) -> list[bytes]:
-        if not pcm16_8k:
+    def _to_frames(self, pcm16: bytes) -> list[bytes]:
+        if not pcm16:
             return []
-        if len(pcm16_8k) % 2:
-            pcm16_8k = pcm16_8k[:-1]
-        ulaw = audioop.lin2ulaw(pcm16_8k, 2)
-        frames = [ulaw[i:i + FRAME_BYTES] for i in range(0, len(ulaw), FRAME_BYTES)]
+        if len(pcm16) % 2:
+            pcm16 = pcm16[:-1]
+        if self.codec == "mulaw":
+            data, pad = audioop.lin2ulaw(pcm16, 2), b"\xff"
+        else:                                  # raw PCM16 (web/app channel)
+            data, pad = pcm16, b"\x00"
+        fb = self.frame_bytes
+        frames = [data[i:i + fb] for i in range(0, len(data), fb)]
         # Never emit a short frame: carriers glitch on it (audible click).
-        if frames and len(frames[-1]) < FRAME_BYTES:
-            frames[-1] += b"\xff" * (FRAME_BYTES - len(frames[-1]))  # u-law silence
+        if frames and len(frames[-1]) < fb:
+            frames[-1] += pad * (fb - len(frames[-1]))
         return frames
 
     async def _playback_pump(self) -> None:
@@ -1125,7 +1139,7 @@ class TurnEngine:
                 except asyncio.QueueEmpty:
                     if mid_sentence:
                         underruns += 1           # caller hears a mid-word gap here
-                    item = _SILENCE_FRAME        # keep the RTP stream warm
+                    item = self._silence_frame   # keep the RTP stream warm
                     is_fill = True
             else:
                 item = await self._playback_queue.get()

@@ -32,6 +32,7 @@ class AgentConfig:
     # Voice & language
     language: str = "te-IN"
     voice: str = "anushka"
+    voice_pace: float = 1.0            # 0.5-2.0; ~0.95 = calmer, more human
     enable_language_switch: bool = True
 
     # Persona

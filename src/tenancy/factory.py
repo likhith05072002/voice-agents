@@ -64,6 +64,8 @@ def build_engine(
     extra_context: str = "",
     greeting_audio: bytes | None = None,
     instant_pause: bool = True,
+    sample_rate: int = 8000,
+    codec: str = "mulaw",
 ) -> TurnEngine:
     eag = agent_eagerness(agent)
     system_prompt = agent.system_prompt
@@ -89,6 +91,8 @@ def build_engine(
         # hold-and-merge is what keeps those splits from becoming answered
         # half-questions (see endpointing.looks_continuable).
         enable_smart_endpointing=True,
+        sample_rate=sample_rate,
+        codec=codec,
         continuation_timeout_s=eag.continuation_timeout_s,
         enable_idle=agent.enable_idle,
         idle_reprompt_s=idle_reprompt_s,

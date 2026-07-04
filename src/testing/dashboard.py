@@ -279,7 +279,7 @@ async function webCall() {
       return;
     }
     const i16 = new Int16Array(e.data);
-    const buf = webCtx.createBuffer(1, i16.length, 8000);
+    const buf = webCtx.createBuffer(1, i16.length, 16000);   // wideband channel
     const ch = buf.getChannelData(0);
     for (let i = 0; i < i16.length; i++) ch[i] = i16[i] / 32768;
     const s = webCtx.createBufferSource();

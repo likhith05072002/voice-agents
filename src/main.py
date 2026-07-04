@@ -635,12 +635,15 @@ async def web_call(websocket: WebSocket):
         await stt.connect(language=agent.language)
         llm = SarvamLLMClient(settings.sarvam_api_key,
                               model=agent.llm_model or settings.sarvam_llm_model)
-        tts = SarvamTTSClient(settings.sarvam_api_key, model=settings.sarvam_tts_model)
-        await tts.connect(language=agent.language, voice=agent.voice, sample_rate="8000")
+        tts = SarvamTTSClient(settings.sarvam_api_key, model=settings.sarvam_tts_model,
+                              pace=agent.voice_pace)
+        # Wideband: bulbul synthesizes natively at 24k — the browser has no
+        # telephony codec constraint, so it gets 16k PCM (2x the voice quality
+        # of the 8k phone channel).
+        await tts.connect(language=agent.language, voice=agent.voice, sample_rate="16000")
 
         async def send_media(frame: bytes) -> None:
-            # engine emits mu-law 8k frames; browser wants linear PCM16
-            await websocket.send_bytes(audioop.ulaw2lin(frame, 2))
+            await websocket.send_bytes(frame)     # already PCM16 @16k
 
         def transcript_sink(role: str, text: str) -> None:
             logger.info("transcript", agent=agent.agent_id, role=role,
@@ -654,6 +657,7 @@ async def web_call(websocket: WebSocket):
             idle_reprompt_s=settings.idle_reprompt_ms / 1000,
             idle_hangup_s=settings.idle_hangup_ms / 1000,
             instant_pause=True,          # browser AEC keeps the mic echo-free
+            sample_rate=16000, codec="pcm16",
         )
         engine_task = asyncio.create_task(engine.run())
 
@@ -788,7 +792,8 @@ async def media_stream(websocket: WebSocket):
                              if agent.llm_reasoning_effort
                              else settings.sarvam_llm_reasoning_effort,
         )
-        tts = SarvamTTSClient(settings.sarvam_api_key, model=settings.sarvam_tts_model)
+        tts = SarvamTTSClient(settings.sarvam_api_key, model=settings.sarvam_tts_model,
+                              pace=agent.voice_pace)
 
         dsp = None
         if (agent.enable_input_dsp or agent.enable_echo_cancellation
