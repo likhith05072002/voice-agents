@@ -53,7 +53,12 @@ class SarvamTTSClient:
         self._voice = voice
         self._sample_rate = sample_rate
         if self._receive_task:
-            self._receive_task.cancel()
+            task, self._receive_task = self._receive_task, None
+            task.cancel()
+            try:
+                await task     # let its finally-sentinel land BEFORE we proceed
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
         async def _open():
             # Model AND send_completion_event are URL query params — both are
             # silently ignored in the config message (proven live; the ignored
@@ -194,6 +199,35 @@ class SarvamTTSClient:
         finally:
             # Unblock any consumer waiting on a permanently-closed connection.
             await self._audio_queue.put(None)
+
+    async def abort(self) -> None:
+        """Hard-stop an in-flight synthesis after a confirmed barge-in.
+
+        Sarvam has no server-side cancel: once text is flushed, the server
+        streams the WHOLE utterance. Closing the socket is the only way to
+        guarantee zero stale audio crosses into the next turn (a fresh socket
+        cannot deliver old chunks). ``send_text`` reconnects lazily, and the
+        reconnect cost hides under the next turn's LLM generation."""
+        if self._receive_task:
+            task, self._receive_task = self._receive_task, None
+            task.cancel()
+            try:
+                # MUST await: the dying receive loop's `finally` enqueues a
+                # sentinel — un-awaited, it lands AFTER any drain and would
+                # falsely complete the next turn's first sentence.
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+        if self._ws:
+            ws, self._ws = self._ws, None
+            try:
+                await asyncio.wait_for(ws.close(), timeout=1.0)
+            except Exception:  # noqa: BLE001 — a dead socket is the goal anyway
+                pass
+        # Fresh queue object: nothing that ever touched the interrupted turn
+        # can reach the next one. (A drain has a race window; this doesn't.)
+        self._audio_queue = asyncio.Queue()
+        logger.info("tts.aborted")
 
     async def close(self) -> None:
         if self._receive_task:

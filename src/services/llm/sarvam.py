@@ -114,7 +114,7 @@ class SarvamLLMClient:
         # proxy env (slow on some platforms), so don't pay for it until a real
         # request is made (and never in pure-logic tests).
         self._client: httpx.AsyncClient | None = None
-        self._cancel = False
+        self._active: object | None = None   # per-call cancellation token
 
     @property
     def _http(self) -> httpx.AsyncClient:
@@ -196,7 +196,12 @@ class SarvamLLMClient:
     ) -> str:
         """Stream LLM tokens, detect sentence boundaries, put SentenceEvents on queue.
         Returns the full response text."""
-        self._cancel = False
+        # Per-call cancellation token. A shared boolean reset at call entry can
+        # REVIVE a previous, not-yet-dead stream (cancel A -> B starts -> flag
+        # cleared -> A's loop resumes burning tokens). With a token, cancel()
+        # kills the current stream and a new call supersedes any older one.
+        token = object()
+        self._active = token
         buffer = ""
         full_response = ""
         is_first = True
@@ -218,7 +223,7 @@ class SarvamLLMClient:
                     return ""
 
                 async for line in resp.aiter_lines():
-                    if self._cancel:
+                    if self._active is not token:   # cancelled or superseded
                         break
                     if not line.startswith("data: "):
                         continue
@@ -256,7 +261,7 @@ class SarvamLLMClient:
                         buffer = ""
 
             # Flush remaining buffer
-            if buffer.strip() and not self._cancel:
+            if buffer.strip() and self._active is token:
                 evt = SentenceEvent(
                     text=buffer,
                     is_first=is_first,
@@ -265,18 +270,20 @@ class SarvamLLMClient:
                 await sentence_queue.put(evt)
 
             logger.info("llm.stream_done", chars=len(full_response),
-                        tail_chars=len(buffer), cancelled=self._cancel,
+                        tail_chars=len(buffer), cancelled=self._active is not token,
                         ms=round((time.perf_counter() - start) * 1000))
 
         except Exception as e:
             logger.error("llm.stream_error", error=str(e))
-
-        # Signal end of generation
-        await sentence_queue.put(None)
+        finally:
+            # ALWAYS signal end of generation — an early `return` on HTTP error
+            # used to skip this and leave the consumer blocked forever (turn
+            # stuck in THINKING until the caller spoke again).
+            sentence_queue.put_nowait(None)
         return full_response
 
     def cancel(self) -> None:
-        self._cancel = True
+        self._active = None
 
     async def close(self) -> None:
         if self._client is not None:

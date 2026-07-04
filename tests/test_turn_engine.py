@@ -371,3 +371,63 @@ async def test_hard_phrase_interrupts_immediately():
 
     await stt.q.put(None)
     await asyncio.wait_for(run, timeout=3.0)
+
+
+async def test_confirmed_interrupt_aborts_tts_socket():
+    """A confirmed barge-in must hard-abort TTS so no stale audio from the
+    interrupted answer can pair with the next answer's text."""
+    import asyncio
+    from src.pipeline.turn_engine import TurnEngine, State
+    from src.services.stt.sarvam import TranscriptEvent, VADEvent
+    from src.services.llm.sarvam import SentenceEvent
+
+    class _STT:
+        def __init__(self): self.q = asyncio.Queue()
+        async def get_event(self): return await self.q.get()
+
+    class _LLM:
+        async def generate_sentences(self, messages, queue):
+            await queue.put(SentenceEvent(text="A long answer sentence. ",
+                                          is_first=True, timestamp=0.0))
+            await asyncio.sleep(0.2)          # keep the turn alive to interrupt
+            await queue.put(None)
+            return "A long answer sentence. "
+        def cancel(self): ...
+
+    class _TTS:
+        def __init__(self):
+            self.aborted = 0
+            self._p = []
+        async def reset(self): self._p = []
+        async def send_text(self, t): self._p = [b"\x01\x00" * 320, None]
+        async def flush(self): ...
+        async def get_audio(self):
+            await asyncio.sleep(0.01)
+            return self._p.pop(0) if self._p else None
+        async def abort(self): self.aborted += 1
+
+    sent = []
+    async def _send(f): sent.append(f)
+    tts = _TTS()
+    engine = TurnEngine(stt=_STT(), llm=_LLM(), tts=tts, send_media=_send,
+                        system_prompt="s", greeting_text="", frame_pace_s=0)
+    run = asyncio.create_task(engine.run())
+    await engine.stt.q.put(TranscriptEvent(text="tell me everything about gold",
+                                           is_final=True, language="en-IN", timestamp=0.0))
+    for _ in range(200):
+        if engine.state == State.SPEAKING:
+            break
+        await asyncio.sleep(0.005)
+    # caller interrupts with a real question while the agent speaks
+    await engine.stt.q.put(TranscriptEvent(text="wait where are you located",
+                                           is_final=True, language="en-IN", timestamp=0.0))
+    for _ in range(300):
+        if tts.aborted:
+            break
+        await asyncio.sleep(0.005)
+    await engine.stt.q.put(None)
+    try:
+        await asyncio.wait_for(run, timeout=4.0)
+    except asyncio.TimeoutError:
+        run.cancel()
+    assert tts.aborted >= 1

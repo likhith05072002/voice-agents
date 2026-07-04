@@ -19,7 +19,10 @@
     {
       "barge_in_during_answer": "Sorry to interrupt you, what about your pricing?",
       "trigger_after_s": 1.5,
-      "expect_language": "en-IN"
+      "expect_language": "en-IN",
+      "expect_keywords": [
+        "pricing"
+      ]
     },
     {
       "say": "ಈಗ ನಾವು ಕನ್ನಡದಲ್ಲಿ ಮಾತನಾಡೋಣ. ನಿಮ್ಮ ಕಂಪನಿಯ ಸೇವೆಗಳ ಬಗ್ಗೆ ಎಲ್ಲವನ್ನೂ ವಿವರವಾಗಿ ಹೇಳಿ.",
@@ -31,7 +34,10 @@
       "barge_in_during_answer": "ಒಂದು ನಿಮಿಷ, ನಿಮ್ಮ ಕಂಪನಿ ಎಲ್ಲಿದೆ?",
       "trigger_after_s": 1.5,
       "language": "kn-IN",
-      "expect_language": "kn-IN"
+      "expect_language": "kn-IN",
+      "expect_keywords": [
+        "ಆಸ್ಟಿನ್"
+      ]
     },
     {
       "say": "ಕಂಪನಿ ಯಾವ ವರ್ಷ ಪ್ರಾರಂಭವಾಯಿತು?",

@@ -561,6 +561,10 @@ class TurnEngine:
     async def _confirm_interrupt(self, next_transcript: str) -> None:
         """The single, centralised interrupt — same four steps, every time."""
         self._candidate = False
+        # 0. Silence FIRST. On transcript-confirmed interrupts (no VAD candidate
+        # preceded this) the pump is still running — every statement below that
+        # awaits would otherwise let the old answer keep playing meanwhile.
+        self._pump_gate.clear()
         self.llm.cancel()                       # 1. stop token generation
         turn = self._current_turn
         if turn and not turn.done():
@@ -573,6 +577,18 @@ class TurnEngine:
                 pass
         await asyncio.sleep(0)                   # let the pump settle
         self._flush_playback()                  # 3. drop queued audio (critical!)
+        # 3b. Kill the TTS SOCKET. Sarvam has no server-side abort (probed:
+        # 'clear'/'cancel' are invalid, a config re-send lets synthesis run to
+        # completion) — so after an interrupt the server keeps streaming the
+        # OLD answer's audio, which the next turn's collector would pair with
+        # the NEW answer's text (heard live: barge 'where are you?' answered
+        # with the interrupted services list). A closed socket cannot deliver
+        # stale chunks; the reconnect happens under the new turn's LLM time.
+        if hasattr(self.tts, "abort"):
+            try:
+                await self.tts.abort()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("tts.abort_failed", error=str(e))
         if self.on_pause is not None:            # ...and the carrier's buffer
             try:
                 self.on_pause()
@@ -915,9 +931,14 @@ class TurnEngine:
 
         await self._finish_playback()
         await self._run_deferred_action()   # e.g. transfer, after audio played
-        if full.strip():
-            self.history.append({"role": "assistant", "content": full})
-            logger.info("turn.done", assistant_text=full[:100].encode("ascii", "replace").decode())
+        # History records what the caller HEARD (pump-confirmed marks), not what
+        # the LLM generated: a failed tail synthesis means `full` contains
+        # sentences that were never spoken, and the model would believe it said
+        # them. Fall back to `full` only when no mark landed at all.
+        said = self._spoken if self._spoken.strip() else full
+        if said.strip():
+            self.history.append({"role": "assistant", "content": said})
+            logger.info("turn.done", assistant_text=said[:100].encode("ascii", "replace").decode())
         self.history = prune(self.history)
         self._publish_metrics(tl)
         if self._turn_metrics is tl:
