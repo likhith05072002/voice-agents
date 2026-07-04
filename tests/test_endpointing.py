@@ -40,3 +40,16 @@ def test_multilingual_continuation_words():
     assert looks_incomplete("मुझे जानना है की") is True       # Hindi "ki"
     assert looks_incomplete("నాకు కావాలి మరియు") is True       # Telugu "mariyu" (and)
     assert looks_incomplete("enakku theriyanum aanal") is True  # Tamil romanized "but"
+
+
+def test_context_fragments_are_held_for_continuation():
+    from src.pipeline.endpointing import looks_continuable
+    # front-loaded context, the ask comes next breath -> hold
+    assert looks_continuable("Hello. I found your website online.") is True
+    assert looks_continuable("अब हम हिंदी में बात करते हैं।") is True
+    # actual questions/requests -> fire immediately
+    assert looks_continuable("Can you tell me what Cocolevio does?") is False
+    assert looks_continuable("Tell me everything about your services in detail.") is False
+    assert looks_continuable("ನಿಮ್ಮ ಕಂಪನಿ ಎಲ್ಲಿದೆ?") is False
+    assert looks_continuable("ಕಂಪನಿಯ ಸೇವೆಗಳ ಬಗ್ಗೆ ಹೇಳಿ.") is False
+    assert looks_continuable("रुकिए, क्या आपके पास कोई HR प्रोडक्ट है?") is False

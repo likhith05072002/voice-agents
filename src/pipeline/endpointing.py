@@ -56,6 +56,43 @@ def _last_word(text: str) -> str:
     return parts[-1].strip(string.punctuation)
 
 
+# Words that signal the caller has actually ASKED something (question words,
+# request verbs) across our caller languages. A final containing none of these
+# and no '?' is usually front-loaded context ("Hello. I found your website
+# online.") — the ask arrives in the next breath.
+REQUEST_SIGNALS: frozenset[str] = frozenset({
+    # English interrogatives + request verbs
+    "what", "when", "where", "how", "why", "who", "which", "can", "could",
+    "would", "will", "do", "does", "did", "is", "are", "should", "tell",
+    "give", "book", "show", "explain", "need", "want", "know", "help",
+    # Hindi
+    "क्या", "कब", "कहाँ", "कहां", "कैसे", "क्यों", "कौन", "कितना", "कितनी",
+    "बताइए", "बताओ", "बताइये", "चाहिए", "दीजिए", "कीजिए", "है",
+    # Kannada
+    "ಏನು", "ಯಾವ", "ಎಲ್ಲಿ", "ಎಲ್ಲಿದೆ", "ಹೇಗೆ", "ಯಾಕೆ", "ಏಕೆ", "ಎಷ್ಟು",
+    "ಹೇಳಿ", "ತಿಳಿಸಿ", "ಬೇಕು", "ಕೊಡಿ",
+    # Telugu
+    "ఏమి", "ఎప్పుడు", "ఎక్కడ", "ఎలా", "ఎందుకు", "ఎంత", "చెప్పండి", "కావాలి",
+    # Tamil
+    "என்ன", "எப்போது", "எங்கே", "எப்படி", "ஏன்", "எவ்வளவு", "சொல்லுங்கள்",
+})
+
+
+def looks_continuable(text: str) -> bool:
+    """True when a final should be HELD briefly for a continuation: either it
+    is clearly unfinished (``looks_incomplete``), or it is a statement with no
+    question mark and no request signal. Callers front-load context ("Hello. I
+    found your website online. <breath> Can you tell me…") and forced-flush
+    endpointing splits exactly at that breath — answering the context fragment
+    alone reads as the agent interrupting with non-sequiturs."""
+    if looks_incomplete(text):
+        return True
+    if "?" in text:
+        return False
+    words = {w.strip(string.punctuation + "।॥…") for w in text.lower().split()}
+    return not (words & REQUEST_SIGNALS)
+
+
 def looks_incomplete(text: str) -> bool:
     """True if ``text`` looks like an unfinished utterance (wait for more)."""
     stripped = text.strip()

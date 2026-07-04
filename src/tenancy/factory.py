@@ -85,6 +85,10 @@ def build_engine(
         false_timeout_s=eag.false_timeout_s,
         speech_end_grace_s=eag.speech_end_grace_s,
         instant_pause=instant_pause,
+        # Forced-flush endpointing splits two-part utterances at the breath;
+        # hold-and-merge is what keeps those splits from becoming answered
+        # half-questions (see endpointing.looks_continuable).
+        enable_smart_endpointing=True,
         continuation_timeout_s=eag.continuation_timeout_s,
         enable_idle=agent.enable_idle,
         idle_reprompt_s=idle_reprompt_s,

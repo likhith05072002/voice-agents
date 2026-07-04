@@ -41,7 +41,7 @@ from src.services.stt.sarvam import TranscriptEvent, VADEvent
 from src.services.llm.sarvam import SentenceEvent
 from src.pipeline.barge_in import classify, Verdict, BACKCHANNELS, HARD_INTERRUPT
 from src.observability.metrics import TurnLatency
-from src.pipeline.endpointing import looks_incomplete
+from src.pipeline.endpointing import looks_continuable
 from src.agent.runner import resolve_tools
 from src.safety.guard import is_injection, guard_sentence, DEFAULT_REFUSAL
 from src.safety.moderation import moderate, is_blocked
@@ -489,7 +489,7 @@ class TurnEngine:
             self._start_turn(txt)
             return
         merged = f"{self._pending_user_text} {txt}".strip() if self._pending_user_text else txt
-        if looks_incomplete(merged):
+        if looks_continuable(merged):
             self._pending_user_text = merged
             logger.info("endpoint.hold", text=merged[:60].encode("ascii", "replace").decode())
             self._arm_continuation()

@@ -69,6 +69,12 @@ def _flush_boundary(buffer: str, is_first: bool) -> bool:
         last_word = stripped[:-1].rsplit(None, 1)[-1].lower() if stripped[:-1].split() else ""
         if last_word in _ABBREVIATIONS:
             return False                     # "Rs." etc. — keep the sentence going
+        # Dotted abbreviations in ANY script: "ಐ.ಒ.ಟಿ." (IoT), "यू.आई." (UI).
+        # Splitting at these dots chops one word into several TTS utterances —
+        # heard live as stuttered letter-by-letter audio. An internal dot or a
+        # very short final token means abbreviation, not sentence end.
+        if "." in last_word or len(last_word.replace(".", "")) <= 2:
+            return False
     return True
 
 
@@ -89,6 +95,7 @@ class SarvamLLMClient:
         model: str = "sarvam-30b",
         reasoning_effort: str | None = None,
         max_tokens: int = 256,
+        temperature: float = 0.3,
     ):
         self.api_key = api_key
         self.base_url = base_url
@@ -99,6 +106,10 @@ class SarvamLLMClient:
         # string ("low"/"medium"/"high") selects an explicit thinking level.
         self.reasoning_effort = reasoning_effort
         self.max_tokens = max_tokens
+        # Receptionists state facts; they don't improvise. Default sampling
+        # invented services/products on live calls ("vocal review service",
+        # "CocolevioCloud") whenever STT garbled a word.
+        self.temperature = temperature
         # Lazily created: constructing an AsyncClient scans the trust store /
         # proxy env (slow on some platforms), so don't pay for it until a real
         # request is made (and never in pure-logic tests).
@@ -134,6 +145,7 @@ class SarvamLLMClient:
             "stream": True,
             "max_tokens": self.max_tokens,
             "reasoning_effort": self.reasoning_effort,
+            "temperature": self.temperature,
         }
 
     def _complete_payload(self, messages: list[dict], tools: list[dict] | None = None) -> dict:
@@ -144,6 +156,7 @@ class SarvamLLMClient:
             "stream": False,
             "max_tokens": self.max_tokens,
             "reasoning_effort": self.reasoning_effort,
+            "temperature": self.temperature,
         }
         if tools:
             body["tools"] = tools

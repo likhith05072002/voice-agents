@@ -64,3 +64,13 @@ def test_first_chunk_emits_earlier_than_old_behaviour():
     assert new_idx < old_idx                            # first audio starts sooner
     # comma is at char 11; first full stop is at ~49
     assert new_idx == 11
+
+
+def test_dotted_abbreviations_do_not_split_any_script():
+    from src.services.llm.sarvam import _flush_boundary
+    # Kannada IoT/UI spelled with dots — chopped audio heard live
+    assert _flush_boundary("ನಮ್ಮ ಸೇವೆಗಳಲ್ಲಿ ಐ.", is_first=False) is False
+    assert _flush_boundary("ಪರಿಹಾರಗಳು ಯು.ಎಕ್ಸ್.", is_first=False) is False
+    assert _flush_boundary("हमारे पास यू.आई.", is_first=False) is False
+    # real sentence ends still split
+    assert _flush_boundary("We are based in Austin, Texas.", is_first=False) is True
