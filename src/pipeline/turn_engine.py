@@ -1027,6 +1027,23 @@ class TurnEngine:
                 sys_content += ("\n\nFACTS (answer from these — never invent or "
                                 "contradict them):\n- " + "\n- ".join(snippets))
                 logger.info("rag.injected", n=len(snippets))
+        # Deterministic live-data prefetch: the SERVER detects price/current-
+        # affairs intent (any language) and fetches the facts itself — the
+        # model receives real numbers instead of choosing whether to call a
+        # tool. Model-driven selection failed live (sarvam-30b under long
+        # multilingual context narrated instead of calling, then hallucinated
+        # a gold price 4x off). The previous user turn joins the probe so
+        # follow-ups like "22." inherit the intent.
+        if self.tools is not None and hasattr(self.tools, "prefetch"):
+            prev_user = next((m["content"] for m in reversed(self.history[:-1])
+                              if m.get("role") == "user"), "")
+            live = await self.tools.prefetch(f"{prev_user}\n{transcript}")
+            if live:
+                sys_content += ("\n\nLIVE DATA fetched right now — answer with "
+                                "these EXACT figures and facts, never estimate:"
+                                "\n- " + "\n- ".join(live))
+                logger.info("prefetch.injected", n=len(live))
+
         messages = [{"role": "system", "content": sys_content}] + select_context(self.history)
 
         if self.enable_fillers and self.filler is not None:

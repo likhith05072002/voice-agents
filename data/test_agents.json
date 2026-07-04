@@ -18,7 +18,8 @@
       "We buy back our hallmarked jewellery at the prevailing gold rate for the metal value.",
       "We take custom and made-to-order designs, and offer jewellery cleaning and minor repairs."
     ],
-    "enable_tools": true
+    "enable_tools": true,
+    "llm_model": "sarvam-105b"
   },
   {
     "agent_id": "dental",

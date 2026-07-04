@@ -7,6 +7,7 @@ registry/runner/engine wiring stays the same.
 
 from __future__ import annotations
 
+import json
 import time
 
 from src.agent.tools import ToolRegistry
@@ -116,6 +117,24 @@ def warm_india_rates() -> None:
             pass
 
 
+# Intent regexes for deterministic prefetch (en/kn/hi/te/ta). Broad on
+# purpose: a false-positive costs one cached lookup; a miss costs a
+# hallucinated price.
+import re as _re
+
+_METAL_RE = _re.compile(
+    r"gold|silver|ಗೋಲ್ಡ್|ಚಿನ್ನ|ಬೆಳ್ಳಿ|ಸಿಲ್ವರ್|सोना|सोने|चांदी|गोल्ड|सिल्वर|"
+    r"బంగార|వెండి|గోల్డ్|தங்கம்|வெள்ளி", _re.IGNORECASE)
+_QTY_RE = _re.compile(
+    r"(\d+(?:\.\d+)?)\s*(?:ಗ್ರಾಂ|grams?|g\b|ग्राम|గ్రామ|கிராம்|gm\b)", _re.IGNORECASE)
+_KARAT_RE = _re.compile(r"\b(18|22|24)\b")
+_AFFAIRS_RE = _re.compile(
+    r"prime minister|president|chief minister|minister of|election|news|"
+    r"who is (?:the )?(?:current|now)|ಪ್ರಧಾನ ?ಮಂತ್ರಿ|ರಾಷ್ಟ್ರಪತಿ|ಮುಖ್ಯಮಂತ್ರಿ|ಸುದ್ದಿ|"
+    r"प्रधानमंत्री|राष्ट्रपति|मुख्यमंत्री|ముఖ్యమంత్రి|అధ్యక్ష|ప్రధాన|"
+    r"பிரதமர்|ஜனாதிபதி|முதல்வர்", _re.IGNORECASE)
+
+
 def build_demo_registry() -> ToolRegistry:
     reg = ToolRegistry()
 
@@ -187,6 +206,43 @@ def build_demo_registry() -> ToolRegistry:
     )
     def get_shop_hours(args: dict) -> dict:
         return {"hours": "10 AM to 9 PM, daily"}
+
+    @reg.prefetcher
+    async def metal_rates_prefetch(text: str):
+        """Any mention of gold/silver -> inject today's REAL rates so the model
+        can never quote from memory, in any language, regardless of whether it
+        would have chosen to call the tool."""
+        if not _METAL_RE.search(text):
+            return None
+        g22 = json.loads(await reg.call("get_metal_price", {"metal": "gold", "karat": 22}))
+        g24 = json.loads(await reg.call("get_metal_price", {"metal": "gold", "karat": 24}))
+        ag = json.loads(await reg.call("get_metal_price", {"metal": "silver"}))
+        line = (f"Today's live metal rates: gold 22 karat Rs.{g22['price_per_gram_inr']}"
+                f" per gram, gold 24 karat Rs.{g24['price_per_gram_inr']} per gram, "
+                f"silver Rs.{ag['price_per_gram_inr']} per gram "
+                f"(source: {g22['source']}; metal rate only — making charges and GST extra).")
+        m = _QTY_RE.search(text)
+        if m:
+            grams = float(m.group(1))
+            k = _KARAT_RE.search(text)
+            karat = int(k.group(1)) if k else 22
+            per = {22: g22, 24: g24}.get(karat, g22)["price_per_gram_inr"]
+            line += (f" For {grams:g} grams of {karat} karat gold that is "
+                     f"Rs.{round(per * grams)} total.")
+        return line
+
+    @reg.prefetcher
+    async def current_affairs_prefetch(text: str):
+        """Current-events questions (leaders, elections, news) -> live web
+        answer injected, so the model never answers public-figure questions
+        from its (stale) training memory. Heard live: 'the US President is
+        Joe Biden' in 2026."""
+        if not _AFFAIRS_RE.search(text):
+            return None
+        result = json.loads(await reg.call("web_search", {"query": text[:200]}))
+        if result.get("answer"):
+            return f"Live web answer to the caller's question: {result['answer']}"
+        return None
 
     import os
     from src.config import settings

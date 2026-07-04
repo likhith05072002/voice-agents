@@ -188,3 +188,20 @@ async def _wait(pred, timeout=2.0):
             return True
         await asyncio.sleep(0.005)
     raise AssertionError("condition not met")
+
+
+async def test_prefetch_metal_intent_any_language():
+    """Deterministic prefetch: metal words in any language inject live rates —
+    the model never gets to guess a price."""
+    from src.agent.demo_tools import _METAL_RE, _AFFAIRS_RE, _QTY_RE
+    for t in ["what is the gold price", "ಒಂದು ಗ್ರಾಂ ಗೋಲ್ಡ್ ಬೆಲೆ ಎಷ್ಟು?",
+              "ನನಗೆ 40 ಗ್ರಾಂ ಗೋಲ್ಡ್ ಬಿಸ್ಕೆಟ್ ಬೇಕಿತ್ತು", "चांदी की कीमत",
+              "బంగారం ధర ఎంత?", "தங்கம் விலை"]:
+        assert _METAL_RE.search(t), t
+    assert not _METAL_RE.search("book me a cleaning on Saturday")
+    m = _QTY_RE.search("ನನಗೆ 40 ಗ್ರಾಂ ಬೇಕು")
+    assert m and m.group(1) == "40"
+    for t in ["who is the President of United States",
+              "ಭಾರತದ ಪ್ರಧಾನ ಮಂತ್ರಿ ಯಾರು", "मुख्यमंत्री कौन है"]:
+        assert _AFFAIRS_RE.search(t), t
+    assert not _AFFAIRS_RE.search("what is the gold price")

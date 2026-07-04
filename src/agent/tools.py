@@ -59,6 +59,32 @@ class ToolRegistry:
             return fn
         return deco
 
+    def prefetcher(self, fn):
+        """Register an intent-detecting prefetcher: ``fn(text) -> str | None``
+        (sync or async). Prefetchers run BEFORE generation; whatever they
+        return is injected into the system context as LIVE DATA. This is the
+        deterministic path for facts that must never be guessed — model-driven
+        tool selection fails under long multilingual context (measured live:
+        sarvam-30b narrated "I need today's rate" instead of calling the tool,
+        then hallucinated Rs.3,000/g)."""
+        if not hasattr(self, "_prefetchers"):
+            self._prefetchers = []
+        self._prefetchers.append(fn)
+        return fn
+
+    async def prefetch(self, text: str) -> list[str]:
+        out: list[str] = []
+        for fn in getattr(self, "_prefetchers", []):
+            try:
+                r = fn(text)
+                if inspect.isawaitable(r):
+                    r = await r
+                if r:
+                    out.append(r if isinstance(r, str) else json.dumps(r))
+            except Exception as e:  # noqa: BLE001 — prefetch is best-effort
+                logger.warning("prefetch.error", error=str(e))
+        return out
+
     def all(self) -> list[Tool]:
         """All registered tools (public iteration for merging/catalogs)."""
         return list(self._tools.values())
