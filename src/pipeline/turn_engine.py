@@ -984,6 +984,24 @@ class TurnEngine:
                                 "contradict them):\n- " + "\n- ".join(snippets))
                 logger.info("rag.injected", n=len(snippets))
         messages = [{"role": "system", "content": sys_content}] + select_context(self.history)
+
+        if self.enable_fillers and self.filler is not None:
+            self.state = State.SPEAKING
+            for frame in self._to_frames(self.filler.select(transcript)):
+                await self._playback_queue.put(frame)
+
+        # Tool/function-calling: the terminating completion IS the answer, so we
+        # speak it directly instead of making a SECOND (streaming) LLM call —
+        # eliminating a full round-trip per tool-enabled turn. TTS streams the
+        # audio, so first-audio latency is unchanged. NOTE: tools run WITHOUT
+        # the language directive — a trailing system message after the user
+        # turn makes Sarvam models skip tool selection entirely and answer (or
+        # refuse) directly (proven offline: 1 tool call without it, 0 with).
+        tool_answer = None
+        if active_tools is not None and len(active_tools):
+            tl.mark("turn_start")
+            messages, tool_answer = await resolve_tools(self.llm.complete, messages, active_tools)
+
         # Mirror the caller's language. TTS reconnection alone is not enough —
         # the LLM keeps answering in the prompt's language unless told, so a
         # caller who switches to Kannada mid-call would hear Kannada-accented
@@ -1001,19 +1019,12 @@ class TurnEngine:
                                 f"another language.")})
                 logger.info("language.directive", lang=lang)
 
-        if self.enable_fillers and self.filler is not None:
-            self.state = State.SPEAKING
-            for frame in self._to_frames(self.filler.select(transcript)):
-                await self._playback_queue.put(frame)
-
-        # Tool/function-calling: the terminating completion IS the answer, so we
-        # speak it directly instead of making a SECOND (streaming) LLM call —
-        # eliminating a full round-trip per tool-enabled turn. TTS streams the
-        # audio, so first-audio latency is unchanged.
-        tool_answer = None
-        if active_tools is not None and len(active_tools):
-            tl.mark("turn_start")
-            messages, tool_answer = await resolve_tools(self.llm.complete, messages, active_tools)
+        # A tool answer generated without the directive may be in the wrong
+        # language — if so, regenerate through the streaming path, which has
+        # the directive AND the language guard (tool results stay in messages).
+        if tool_answer and self._wrong_language(tool_answer):
+            logger.info("tool_answer.wrong_language_restream")
+            tool_answer = None
 
         if tool_answer:
             await self._maybe_switch_language()
