@@ -761,7 +761,11 @@ async def media_stream(websocket: WebSocket):
             logger.info("tester.leg_closed")
             return
 
-        agent_id = info.get("agent_id")
+        # Loopback test legs never pass through the webhook, so the scenario's
+        # agent override must ALSO apply here — otherwise loopback tests run
+        # against the default persona (found: stale answers that no PSTN test
+        # could reproduce).
+        agent_id = info.get("agent_id") or _test_agent_override.get("agent_id")
         agent = (_agent_store.get(agent_id) if agent_id else None) or _agent_store.default()
         logger.info("call.started", agent=agent.agent_id,
                     media_format=str(start_frame.get("start", {}).get("media_format", {})),

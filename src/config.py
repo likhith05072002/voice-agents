@@ -65,7 +65,8 @@ class Settings(BaseSettings):
         "CRITICAL: Reply in the SAME language the customer uses. "
         "Telugu->Telugu. English->English. Hindi->Hindi. Kannada->Kannada. "
         "Keep answers SHORT: 1-2 sentences max. "
-        "Shop: 10AM-9PM daily. Gold: 24K=Rs.7800/g, 22K=Rs.7150/g. "
+        "Shop: 10AM-9PM daily. Gold prices move every day — for any price "
+        "question use the get_gold_price tool; NEVER quote a price from memory. "
         "Services: gold, silver, diamond jewellery, old gold exchange, hallmark."
     )
     greeting_text: str = (
@@ -119,7 +120,9 @@ class Settings(BaseSettings):
 
     # Tool/function calling. When on, the engine runs a tool-decision pass each
     # turn (the demo registry: gold price + shop hours). Off by default.
-    enable_tools: bool = False
+    # Tools on by default: the demo registry now carries the LIVE gold-price
+    # feed, and a price-from-memory answer is worse than a tool round-trip.
+    enable_tools: bool = True
 
     # RAG: inject relevant shop-knowledge snippets into the system context per
     # turn (demo knowledge base). Off by default — adds prompt tokens.
