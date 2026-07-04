@@ -431,3 +431,13 @@ async def test_confirmed_interrupt_aborts_tts_socket():
     except asyncio.TimeoutError:
         run.cancel()
     assert tts.aborted >= 1
+
+
+def test_greeting_only_openers_detected():
+    from src.pipeline.turn_engine import _is_greeting_only
+    assert _is_greeting_only("ನಮಸ್ಕಾರ.") is True
+    assert _is_greeting_only("नमस्ते।") is True
+    assert _is_greeting_only("Hello!") is True
+    assert _is_greeting_only("ನಮಸ್ಕಾರ, ನಮ್ಮ ಕಂಪನಿ ಆಸ್ಟಿನ್‌ನಲ್ಲಿದೆ.") is False
+    assert _is_greeting_only("We were founded in 2015.") is False
+    assert _is_greeting_only("") is False

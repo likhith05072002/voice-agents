@@ -112,6 +112,25 @@ def _join_dotted_abbreviations(text: str) -> str:
     return " ".join(out)
 
 
+# Greeting-only opener sentences the model prepends to mid-call answers
+# ("ನಮಸ್ಕಾರ." before the actual answer) despite persona instructions. They are
+# not just filler: a short greeting plays instantly, the real answer is still
+# synthesizing, and the silence gap reads as "answer finished" — the caller
+# (and the AI tester) asks the next question, which interrupts and KILLS the
+# real answer. Live result: "where are you?" answered by "ನಮಸ್ಕಾರ." alone.
+_GREETING_WORDS = frozenset({
+    "hello", "hi", "hey", "welcome", "greetings", "namaste", "namaskara",
+    "namaskar", "ನಮಸ್ಕಾರ", "नमस्ते", "नमस्कार", "నమస్కారం", "నమస్తే",
+    "வணக்கம்", "ஹலோ", "ನಮಸ್ತೆ", "हैलो", "हेलो",
+})
+
+
+def _is_greeting_only(text: str) -> bool:
+    words = [w.strip(".,!?।॥ ") for w in text.strip().split()]
+    words = [w for w in words if w]
+    return 0 < len(words) <= 2 and all(w.lower() in _GREETING_WORDS for w in words)
+
+
 # One 20ms frame of mu-law digital silence. Sent whenever we have nothing to
 # say: a stream that stops between utterances makes the carrier's comfort-noise
 # generator toggle at every sentence edge, which callers hear as soft thumps
@@ -757,6 +776,15 @@ class TurnEngine:
                         llm_task = asyncio.create_task(
                             self.llm.generate_sentences(messages, sentence_queue))
                         retries += 1
+                        continue
+                    # Drop greeting-only openers ("ನಮಸ್ಕಾರ.") — the call was
+                    # already greeted; mid-call they create a fake end-of-answer
+                    # gap that gets the real answer interrupted. `first` stays
+                    # True so the REAL first sentence keeps clause-flush and
+                    # language-guard treatment.
+                    if first and _is_greeting_only(evt.text):
+                        logger.info("greeting_opener_suppressed",
+                                    text=evt.text[:30].encode("ascii", "replace").decode())
                         continue
                     first = False
                     text, blocked = self._guard(evt.text, active_prompt)
