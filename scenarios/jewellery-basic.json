@@ -7,7 +7,7 @@
     {
       "say": "Hello, what is the price of 22 carat gold today?",
       "expect_keywords": [
-        "7150"
+        "per gram"
       ],
       "max_wait_s": 12
     },

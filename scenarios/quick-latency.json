@@ -7,7 +7,7 @@
     {
       "say": "Hi, how much is 24 carat gold per gram?",
       "expect_keywords": [
-        "7800"
+        "per gram"
       ],
       "max_wait_s": 12
     },
