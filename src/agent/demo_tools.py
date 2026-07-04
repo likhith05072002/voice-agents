@@ -97,4 +97,44 @@ def build_demo_registry() -> ToolRegistry:
     def get_shop_hours(args: dict) -> dict:
         return {"hours": "10 AM to 9 PM, daily"}
 
+    import os
+    from src.config import settings
+    _or_key = settings.openrouter_api_key or os.environ.get("OPENROUTER_API_KEY", "")
+    if _or_key:
+        @reg.tool(
+            "web_search",
+            "Search the live internet for current information: news, current "
+            "events, festival dates, anything time-sensitive that is not in "
+            "your FACTS. Returns a short factual answer.",
+            {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        )
+        async def web_search(args: dict) -> dict:
+            query = str(args.get("query", "")).strip()
+            if not query:
+                return {"error": "empty query"}
+            import httpx
+            try:
+                async with httpx.AsyncClient(timeout=12.0) as c:
+                    r = await c.post(
+                        "https://openrouter.ai/api/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {_or_key}"},
+                        json={
+                            # search-grounded model: answers from live web
+                            "model": "perplexity/sonar",
+                            "messages": [{
+                                "role": "user",
+                                "content": (f"Answer in 1-2 short factual "
+                                            f"sentences: {query}")}],
+                            "max_tokens": 150,
+                        })
+                    r.raise_for_status()
+                    answer = r.json()["choices"][0]["message"]["content"]
+                return {"answer": answer.strip()[:500]}
+            except Exception as e:  # noqa: BLE001 — surface, never crash the turn
+                return {"error": f"search unavailable: {e}"}
+
     return reg

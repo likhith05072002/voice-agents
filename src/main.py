@@ -642,8 +642,18 @@ async def web_call(websocket: WebSocket):
         # of the 8k phone channel).
         await tts.connect(language=agent.language, voice=agent.voice, sample_rate="16000")
 
+        # Coalesce 20ms frames into 80ms batches: 50 tiny buffers/sec made the
+        # browser schedule a new AudioBufferSource every 20ms, and the
+        # scheduling jitter + boundary count was audible as a steady
+        # disturbance under speech. 12.5 msgs/sec = 4x fewer boundaries.
+        _batch = bytearray()
+
         async def send_media(frame: bytes) -> None:
-            await websocket.send_bytes(frame)     # already PCM16 @16k
+            _batch.extend(frame)                  # already PCM16 @16k
+            if len(_batch) >= 640 * 2 * 4:        # 4 frames = 80ms
+                out = bytes(_batch)
+                _batch.clear()
+                await websocket.send_bytes(out)
 
         def transcript_sink(role: str, text: str) -> None:
             logger.info("transcript", agent=agent.agent_id, role=role,

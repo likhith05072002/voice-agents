@@ -426,6 +426,21 @@ class TurnEngine:
             return False
         return norm in BACKCHANNELS or all(w in BACKCHANNELS for w in norm.split())
 
+    def _is_parrot(self, sentence: str) -> bool:
+        """True when a generated sentence is essentially the caller's last
+        utterance repeated back (mirror of _looks_like_own_echo, output side)."""
+        last_user = next((m["content"] for m in reversed(self.history)
+                          if m.get("role") == "user"), "")
+        if not last_user:
+            return False
+        def toks(s: str) -> set:
+            return {w.strip(".,?!।॥").lower() for w in s.split()
+                    if len(w.strip(".,?!।॥")) > 1}
+        a, b = toks(sentence), toks(last_user)
+        if len(a) < 2:
+            return False
+        return len(a & b) / len(a) >= 0.8
+
     def _looks_like_own_echo(self, txt: str) -> bool:
         """A 'user' final that is mostly words from the agent's last utterance
         is our own voice leaking back (speakerphone / weak AEC). Answering it
@@ -844,6 +859,30 @@ class TurnEngine:
                             self.llm.generate_sentences(messages, sentence_queue))
                         retries += 1
                         continue
+                    # Parrot guard: with garbled/fragment inputs the model
+                    # sometimes ECHOES the caller's question instead of
+                    # answering (heard live, twice in one call). One corrective
+                    # regenerate; nothing parroted is ever spoken.
+                    if (first and retries < 2
+                            and self._is_parrot(evt.text)):
+                        logger.warning("parrot.guard_retry",
+                                       got=evt.text[:40].encode("ascii", "replace").decode())
+                        self.llm.cancel()
+                        llm_task.cancel()
+                        try:
+                            await llm_task
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                        sentence_queue = asyncio.Queue()
+                        messages = messages + [{
+                            "role": "system",
+                            "content": ("Do NOT repeat the caller's words back. "
+                                        "ANSWER the question directly; if it is "
+                                        "unclear, politely ask them to repeat it.")}]
+                        llm_task = asyncio.create_task(
+                            self.llm.generate_sentences(messages, sentence_queue))
+                        retries += 1
+                        continue
                     # Drop greeting-only openers ("ನಮಸ್ಕಾರ.") — the call was
                     # already greeted; mid-call they create a fake end-of-answer
                     # gap that gets the real answer interrupted. `first` stays
@@ -968,7 +1007,12 @@ class TurnEngine:
                 active_tools = agent.tools
             logger.info("agent.routed", agent=agent.name)
 
-        sys_content = active_prompt
+        # The model's internal sense of "today" is its training cutoff — asked
+        # the date on a live call it answered a year in the past. The server
+        # always knows; tell it every turn (IST — our callers' timezone).
+        now_ist = time.strftime("%A, %d %B %Y, %I:%M %p",
+                                time.gmtime(time.time() + 19800))
+        sys_content = f"Current date and time (IST): {now_ist}.\n\n{active_prompt}"
         if self.knowledge is not None:
             snippets = self.knowledge.retrieve(transcript)
             # ALWAYS ground the model in the first doc (company identity) PLUS

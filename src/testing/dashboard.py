@@ -271,6 +271,7 @@ async function webCall() {
     $('#linklbl').textContent = 'LIVE BROWSER CALL';
   };
   webWS.onclose = () => { if (webWS) stopWebCall('connection closed'); };
+  let webSamples = 0, webEpoch = 0;   // sample-exact schedule: no float drift
   webWS.onmessage = e => {
     if (typeof e.data === 'string') {
       const m = JSON.parse(e.data);
@@ -284,15 +285,29 @@ async function webCall() {
     for (let i = 0; i < i16.length; i++) ch[i] = i16[i] / 32768;
     const s = webCtx.createBufferSource();
     s.buffer = buf; s.connect(webCtx.destination);
-    if (webPlayT < webCtx.currentTime + 0.05) webPlayT = webCtx.currentTime + 0.08;
-    s.start(webPlayT); webPlayT += buf.duration;
+    // Accumulating float durations drifts by sub-sample amounts and clicks at
+    // chunk joins; deriving each start time from the TOTAL SAMPLE COUNT keeps
+    // every chunk sample-adjacent forever.
+    let t = webEpoch + webSamples / 16000;
+    if (t < webCtx.currentTime + 0.03) {
+      webEpoch = webCtx.currentTime + 0.1;      // (re)anchor after underrun
+      webSamples = 0;
+      t = webEpoch;
+    }
+    s.start(t);
+    webSamples += i16.length;
   };
   webProc.onaudioprocess = ev => {
     if (!webWS || webWS.readyState !== 1) return;
     const inp = ev.inputBuffer.getChannelData(0);
     const out = new Int16Array(Math.floor(inp.length / ratio));
     for (let i = 0; i < out.length; i++) {
-      const v = inp[Math.floor(i * ratio)];
+      // Box-average over the decimation window: naive sample-picking aliases
+      // high frequencies into audible noise in the STT feed.
+      const a = Math.floor(i * ratio), b = Math.floor((i + 1) * ratio);
+      let sum = 0;
+      for (let k = a; k < b; k++) sum += inp[k];
+      const v = sum / Math.max(1, b - a);
       out[i] = Math.max(-32768, Math.min(32767, v * 32768));
     }
     webWS.send(out.buffer);

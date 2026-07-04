@@ -5,6 +5,8 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     # Sarvam AI
     sarvam_api_key: str
+    # OpenRouter (search-grounded models) — powers the web_search tool.
+    openrouter_api_key: str = ""
 
     # Sarvam STT
     sarvam_stt_ws_url: str = "wss://api.sarvam.ai/speech-to-text/ws"
