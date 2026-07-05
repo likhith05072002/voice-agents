@@ -565,3 +565,43 @@ async def test_no_resume_while_caller_still_speaking():
         await task
     except asyncio.CancelledError:
         pass
+
+
+def test_self_repeat_guard_detects_canned_line():
+    """The model re-reading its own last answer verbatim (heard live as the
+    same 'Austin, Texas' line six times) must be caught."""
+    from src.pipeline.turn_engine import TurnEngine
+    e = TurnEngine.__new__(TurnEngine)
+    e.history = [
+        {"role": "user", "content": "who are you"},
+        {"role": "assistant",
+         "content": "We are Cocolevio, a technology consulting company based in Austin, Texas, founded in 2015."},
+        {"role": "user", "content": "tell me about AI in India"},
+    ]
+    # identical fallback = repeat
+    assert e._is_self_repeat(
+        "We are Cocolevio, a technology consulting company based in Austin, Texas.")
+    # a genuinely new answer is NOT a repeat
+    assert not e._is_self_repeat(
+        "Absolutely, we build custom machine learning models and would love to set up a free consultation.")
+    # short confirmations never trip it
+    assert not e._is_self_repeat("Yes, of course.")
+
+
+def test_self_repeat_guard_is_same_language_only():
+    """A restatement in another language shares no tokens, so cross-language
+    answers to the same question are never falsely flagged."""
+    from src.pipeline.turn_engine import TurnEngine
+    e = TurnEngine.__new__(TurnEngine)
+    e.history = [
+        {"role": "assistant",
+         "content": "We are a technology consulting company based in Austin, Texas."},
+    ]
+    # Kannada version of the same idea — different script, not a repeat
+    assert not e._is_self_repeat(
+        "ನಾವು ಆಸ್ಟಿನ್, ಟೆಕ್ಸಾಸ್ ನಲ್ಲಿ ನೆಲೆಸಿರುವ ತಂತ್ರಜ್ಞಾನ ಸಲಹಾ ಕಂಪನಿ.")
+    # but the Kannada line repeated IS caught
+    e.history.append({"role": "assistant",
+        "content": "ನಾವು ಆಸ್ಟಿನ್, ಟೆಕ್ಸಾಸ್ ನಲ್ಲಿ ನೆಲೆಸಿರುವ ತಂತ್ರಜ್ಞಾನ ಸಲಹಾ ಕಂಪನಿ."})
+    assert e._is_self_repeat(
+        "ನಾವು ಆಸ್ಟಿನ್, ಟೆಕ್ಸಾಸ್ ನಲ್ಲಿ ನೆಲೆಸಿರುವ ತಂತ್ರಜ್ಞಾನ ಸಲಹಾ ಕಂಪನಿ.")
