@@ -31,10 +31,13 @@ export function Landing() {
   // The hero always demos the SonusLabs assistant itself — a general,
   // ask-anything AI with live web search (a fixed, known product agent).
   const demo = "sonuslabs";
-  const playVoice = (voice: string) => {
+  const [playingLang, setPlayingLang] = useState<string | null>(null);
+  const playLanguage = (lang: string) => {
     if (!audioRef.current) audioRef.current = new Audio();
-    audioRef.current.src = api.voiceSampleUrl(voice);
-    audioRef.current.play().catch(() => {});
+    setPlayingLang(lang);
+    audioRef.current.src = api.languageSampleUrl(lang);
+    audioRef.current.onended = () => setPlayingLang(null);
+    audioRef.current.play().catch(() => setPlayingLang(null));
   };
 
   return (
@@ -128,18 +131,30 @@ export function Landing() {
           <h2 style={{ fontFamily: serif, fontWeight: 400, fontSize: 38, marginBottom: 8 }}>
             One receptionist. Eleven languages.</h2>
           <p style={{ fontSize: 16, color: C.muted }}>
-            And she switches mid-sentence when your caller does. Tap any to hear the voice.</p>
+            And she switches mid-sentence when your caller does. Tap any — she introduces herself in it.</p>
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12, justifyContent: "center" }}>
-          {LANGS.map((l) => (
-            <div key={l.v} onClick={() => playVoice("neha")} style={{ background: C.paperCard,
-              border: `1px solid ${C.line}`, borderRadius: 14, padding: "13px 18px", minWidth: 150,
-              cursor: "pointer", boxShadow: "0 10px 24px -18px rgba(33,28,21,.4)", textAlign: "center" }}>
-              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase",
-                color: C.faint, marginBottom: 6 }}>{l.en}</div>
-              <div style={{ fontFamily: l.font, fontSize: 20, color: C.ink }}>{l.native}</div>
-            </div>
-          ))}
+          {LANGS.map((l) => {
+            const on = playingLang === l.v;
+            return (
+              <div key={l.v} onClick={() => playLanguage(l.v)} style={{
+                background: on ? C.accentSoft : C.paperCard,
+                border: `1px solid ${on ? C.accentSoftBorder : C.line}`, borderRadius: 14,
+                padding: "13px 18px", minWidth: 150, cursor: "pointer",
+                boxShadow: on ? "0 10px 26px -14px rgba(224,138,30,.5)" : "0 10px 24px -18px rgba(33,28,21,.4)",
+                textAlign: "center", transition: "background .2s, box-shadow .2s" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                  fontSize: 11, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase",
+                  color: on ? C.accentDeep : C.faint, marginBottom: 6 }}>
+                  {on && <span style={{ display: "flex", gap: 1.5, height: 9 }}>
+                    {[0, .15, .3].map((d) => <span key={d} style={{ width: 2, background: C.accent,
+                      borderRadius: 2, animation: `sl-eq .6s infinite ${d}s` }} />)}</span>}
+                  {l.en}
+                </div>
+                <div style={{ fontFamily: l.font, fontSize: 20, color: C.ink }}>{l.native}</div>
+              </div>
+            );
+          })}
         </div>
       </div>
 

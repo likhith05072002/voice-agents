@@ -71,6 +71,7 @@ export const api = {
 
   voiceLab: () => j<{ voices: string[] }>("/voice-lab"),
   voiceSampleUrl: (voice: string) => `${API_BASE}/voice-sample/${voice}`,
+  languageSampleUrl: (lang: string) => `${API_BASE}/language-sample/${lang}`,
 
   calls: (limit = 50) => j<{ calls: CallRecord[] }>(`/calls?limit=${limit}`),
   callsSearch: (q: string) =>

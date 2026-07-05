@@ -80,11 +80,13 @@ async def lifespan(app: FastAPI):
                     logger.warning("kb_i18n.warm_failed", agent=a.agent_id,
                                    error=str(e))
     warm_task = asyncio.create_task(_warm_kbs())
-    # Pre-render the voice previews so the demo's play button is instant.
+    # Pre-render the voice + language previews so the demo's play buttons are instant.
     samples_task = asyncio.create_task(_warm_voice_samples())
+    lang_samples_task = asyncio.create_task(_warm_lang_samples())
     yield
     warm_task.cancel()
     samples_task.cancel()
+    lang_samples_task.cancel()
 
 
 app = FastAPI(title="Voice Agent", version="0.8.0", lifespan=lifespan)
@@ -692,6 +694,63 @@ async def voice_sample(voice: str):
 @app.get("/voice-lab")
 async def voice_lab():
     return {"voices": VOICE_LAB_CANDIDATES}
+
+
+# Per-language self-intro (the landing "Eleven languages" chips) — the assistant
+# introduces itself IN that language, in the default voice. All 11 verified to
+# render on bulbul:v3. Brand ("SonusLabs") stays Latin; the model reads mixed.
+_LANG_INTRO = {
+    "en-IN": "Hi! I am Neha, your SonusLabs assistant. I can speak eleven Indian languages.",
+    "hi-IN": "नमस्ते! मैं नेहा हूँ, आपकी SonusLabs सहायक। मैं ग्यारह भारतीय भाषाएँ बोल सकती हूँ।",
+    "kn-IN": "ನಮಸ್ಕಾರ! ನಾನು ನೇಹಾ, ನಿಮ್ಮ SonusLabs ಸಹಾಯಕಿ. ನಾನು ಹನ್ನೊಂದು ಭಾರತೀಯ ಭಾಷೆಗಳನ್ನು ಮಾತನಾಡಬಲ್ಲೆ.",
+    "te-IN": "నమస్కారం! నేను నేహా, మీ SonusLabs సహాయకురాలిని. నేను పదకొండు భారతీయ భాషలు మాట్లాడగలను.",
+    "ta-IN": "வணக்கம்! நான் நேஹா, உங்கள் SonusLabs உதவியாளர். நான் பதினொரு இந்திய மொழிகளில் பேச முடியும்.",
+    "ml-IN": "നമസ്കാരം! ഞാൻ നേഹ, നിങ്ങളുടെ SonusLabs സഹായി. എനിക്ക് പതിനൊന്ന് ഇന്ത്യൻ ഭാഷകൾ സംസാരിക്കാൻ കഴിയും.",
+    "mr-IN": "नमस्कार! मी नेहा, तुमची SonusLabs सहाय्यक. मी अकरा भारतीय भाषा बोलू शकते.",
+    "bn-IN": "নমস্কার! আমি নেহা, আপনার SonusLabs সহকারী। আমি এগারোটি ভারতীয় ভাষায় কথা বলতে পারি।",
+    "gu-IN": "નમસ્તે! હું નેહા છું, તમારી SonusLabs સહાયક. હું અગિયાર ભારતીય ભાષાઓ બોલી શકું છું.",
+    "pa-IN": "ਸਤ ਸ੍ਰੀ ਅਕਾਲ! ਮੈਂ ਨੇਹਾ ਹਾਂ, ਤੁਹਾਡੀ SonusLabs ਸਹਾਇਕ। ਮੈਂ ਗਿਆਰਾਂ ਭਾਰਤੀ ਭਾਸ਼ਾਵਾਂ ਬੋਲ ਸਕਦੀ ਹਾਂ।",
+    "od-IN": "ନମସ୍କାର! ମୁଁ ନେହା, ଆପଣଙ୍କ SonusLabs ସହାୟିକା। ମୁଁ ଏଗାର ଭାରତୀୟ ଭାଷାରେ କଥା ହୋଇପାରେ।",
+}
+_lang_sample_cache: dict[str, bytes] = {}
+
+
+async def _render_lang_sample(lang: str) -> bytes:
+    from src.testing.caller import render_utterances
+    import io
+    import wave as _wave
+    text = _LANG_INTRO[lang]
+    audio = await render_utterances([text], lang, settings.sarvam_tts_voice or "neha",
+                                    settings.sarvam_api_key)
+    pcm = audio[text]
+    buf = io.BytesIO()
+    with _wave.open(buf, "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(8000); w.writeframes(pcm)
+    return buf.getvalue()
+
+
+async def _warm_lang_samples() -> None:
+    async def _one(lang: str) -> None:
+        try:
+            _lang_sample_cache[lang] = await _render_lang_sample(lang)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("lang_sample.warm_failed", lang=lang, error=str(e))
+    await asyncio.gather(*(_one(l) for l in _LANG_INTRO))
+    logger.info("lang_samples.warmed", count=len(_lang_sample_cache))
+
+
+@app.get("/language-sample/{lang}")
+async def language_sample(lang: str):
+    """The assistant's self-intro spoken IN `lang` (default voice), warm-cached."""
+    from fastapi.responses import Response
+    if lang not in _LANG_INTRO:
+        return JSONResponse({"error": f"unsupported language '{lang}'"}, status_code=404)
+    wav = _lang_sample_cache.get(lang)
+    if wav is None:
+        wav = await _render_lang_sample(lang)
+        _lang_sample_cache[lang] = wav
+    return Response(content=wav, media_type="audio/wav",
+                    headers={"Cache-Control": "public, max-age=86400"})
 
 
 # ─── Web call (browser mic <-> agent, no telephony) ───
