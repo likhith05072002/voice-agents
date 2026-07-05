@@ -179,9 +179,14 @@ function AgentDetail({ id, onClose }: { id: string; onClose: () => void }) {
 /* ─── CALLS ─── */
 function CallsTab() {
   const [calls, setCalls] = useState<CallRecord[]>([]);
+  const [names, setNames] = useState<Record<string, string>>({});
   const [q, setQ] = useState("");
   const [open, setOpen] = useState<string | null>(null);
-  useEffect(() => { api.calls(50).then((r) => setCalls(r.calls)).catch(() => {}); }, []);
+  useEffect(() => {
+    api.calls(50).then((r) => setCalls(r.calls)).catch(() => {});
+    api.agentsLite().then((r) =>
+      setNames(Object.fromEntries(r.agents.map((a) => [a.agent_id, a.name])))).catch(() => {});
+  }, []);
   useEffect(() => {
     const t = setTimeout(() => {
       (q.trim() ? api.callsSearch(q.trim()) : api.calls(50)).then((r) => setCalls(r.calls)).catch(() => {});
@@ -213,7 +218,7 @@ function CallsTab() {
                 gridTemplateColumns: "150px 1fr 70px 60px 100px 100px", gap: 12, padding: "14px 18px", fontSize: 13.5,
                 borderBottom: "1px solid #241F18", cursor: "pointer", alignItems: "center" }}>
                 <span style={{ color: "#B7AD98" }}>{c.started_at ? new Date(c.started_at * 1000).toLocaleTimeString() : ""}</span>
-                <span style={{ fontWeight: 600 }}>{c.agent_id}</span>
+                <span style={{ fontWeight: 600 }}>{names[c.agent_id] || c.agent_id}</span>
                 <span style={{ color: "#B7AD98" }}>{fmt(c.duration_s)}</span>
                 <span style={{ color: "#B7AD98" }}>{c.turn_count ?? ""}</span>
                 <span style={{ color: lat > 1500 ? C.red : lat > 900 ? C.accent : C.green, fontFamily: mono, fontSize: 12.5 }}>
@@ -297,6 +302,7 @@ function VoiceTab() {
   const [voices, setVoices] = useState<string[]>([]);
   const [agents, setAgents] = useState<AgentLite[]>([]);
   const [playing, setPlaying] = useState<string | null>(null);
+  const [toast, setToast] = useState("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
   useEffect(() => { api.voiceLab().then((r) => setVoices(r.voices)); api.agentsLite().then((r) => setAgents(r.agents)); }, []);
   const play = (v: string) => {
@@ -308,11 +314,17 @@ function VoiceTab() {
   const assign = async (voice: string, agentId: string) => {
     if (!agentId) return;
     await api.updateAgent(agentId, { voice });
-    alert(`${voice} set as ${agentId}'s voice.`);
+    const name = agents.find((a) => a.agent_id === agentId)?.name || agentId;
+    setToast(`${voice[0].toUpperCase()}${voice.slice(1)} is now ${name}'s voice.`);
+    setTimeout(() => setToast(""), 2500);
   };
   return (
     <>
-      <h1 style={{ fontFamily: serif, fontWeight: 400, fontSize: 30, marginBottom: 18 }}>Voice Lab</h1>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 18 }}>
+        <h1 style={{ fontFamily: serif, fontWeight: 400, fontSize: 30 }}>Voice Lab</h1>
+        {toast && <span style={{ fontSize: 13, fontWeight: 600, color: C.ink, background: C.accent,
+          borderRadius: 100, padding: "5px 12px", animation: "sl-fadeup .3s" }}>✓ {toast}</span>}
+      </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(230px,1fr))", gap: 16 }}>
         {voices.map((v) => (
           <div key={v} style={{ ...cardPad }}>
@@ -342,26 +354,31 @@ function VoiceTab() {
 
 /* ─── ANALYTICS ─── */
 function AnalyticsTab() {
-  const [stats, setStats] = useState<Record<string, unknown> | null>(null);
   const [calls, setCalls] = useState<CallRecord[]>([]);
+  const [names, setNames] = useState<Record<string, string>>({});
   useEffect(() => {
-    api.analytics().then(setStats).catch(() => setStats({}));
-    api.calls(200).then((r) => setCalls(r.calls)).catch(() => {});
+    api.calls(500).then((r) => setCalls(r.calls)).catch(() => {});
+    api.agentsLite().then((r) =>
+      setNames(Object.fromEntries(r.agents.map((a) => [a.agent_id, a.name])))).catch(() => {});
   }, []);
   const total = calls.length;
   const avgLat = total ? Math.round(calls.reduce((s, c) => s + (c.avg_perceived_ms || 0), 0) / total) : 0;
-  const booked = calls.filter((c) => c.outcome === "booked").length;
-  const mins = Math.round(calls.reduce((s, c) => s + (c.duration_s || 0), 0) / 60);
+  const totalSecs = calls.reduce((s, c) => s + (c.duration_s || 0), 0);
+  const mins = Math.round(totalSecs / 60);
+  const avgLen = total ? Math.round(totalSecs / total) : 0;
   const cards = [
     { label: "Total calls", value: String(total), sub: "all time" },
     { label: "Avg response", value: avgLat ? `${avgLat}ms` : "—", sub: "perceived latency" },
     { label: "Minutes handled", value: String(mins), sub: `≈ ₹${mins * 3} at ₹3/min` },
-    { label: "Booked", value: String(booked), sub: total ? `${Math.round(booked / total * 100)}% of calls` : "" },
+    { label: "Avg call length", value: avgLen ? `${Math.floor(avgLen / 60)}:${String(avgLen % 60).padStart(2, "0")}` : "—", sub: "minutes:seconds" },
   ];
-  const outcomes = ["booked", "info", "handoff", "missed"].map((o) => ({
-    label: o, pct: total ? Math.round(calls.filter((c) => c.outcome === o).length / total * 100) : 0,
-    color: o === "booked" ? C.green : o === "handoff" ? C.accent : o === "missed" ? C.red : "#7C8B9A",
-  }));
+  // Real breakdown: calls per agent (outcomes aren't classified server-side yet).
+  const byAgent = Object.entries(
+    calls.reduce<Record<string, number>>((m, c) => {
+      m[c.agent_id] = (m[c.agent_id] || 0) + 1; return m;
+    }, {})
+  ).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  const maxAgent = byAgent[0]?.[1] || 1;
   return (
     <>
       <h1 style={{ fontFamily: serif, fontWeight: 400, fontSize: 30, marginBottom: 18 }}>Analytics</h1>
@@ -374,16 +391,17 @@ function AnalyticsTab() {
           </div>
         ))}
       </div>
-      <div style={{ ...cardPad, maxWidth: 460 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: C.darkMuted, marginBottom: 18 }}>OUTCOMES</div>
+      <div style={{ ...cardPad, maxWidth: 520 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.darkMuted, marginBottom: 18 }}>CALLS BY AGENT</div>
+        {byAgent.length === 0 && <div style={{ color: C.darkMuted, fontSize: 14 }}>No calls yet.</div>}
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          {outcomes.map((o) => (
-            <div key={o.label}>
+          {byAgent.map(([id, n]) => (
+            <div key={id}>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 6 }}>
-                <span style={{ color: "#D8CFBE", textTransform: "capitalize" }}>{o.label}</span>
-                <span style={{ color: C.darkMuted }}>{o.pct}%</span></div>
+                <span style={{ color: "#D8CFBE" }}>{names[id] || id}</span>
+                <span style={{ color: C.darkMuted }}>{n} {n === 1 ? "call" : "calls"}</span></div>
               <div style={{ height: 8, background: C.dark, borderRadius: 6, overflow: "hidden" }}>
-                <div style={{ height: "100%", width: `${o.pct}%`, background: o.color, borderRadius: 6 }} /></div>
+                <div style={{ height: "100%", width: `${Math.round(n / maxAgent * 100)}%`, background: C.accent, borderRadius: 6 }} /></div>
             </div>
           ))}
         </div>
