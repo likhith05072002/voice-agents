@@ -157,7 +157,10 @@ async def onboard_research(request: Request):
     if not url:
         return JSONResponse({"error": "website_url required"}, status_code=400)
     from src.onboarding import research_website
-    llm = SarvamLLMClient(settings.sarvam_api_key, model="sarvam-105b")
+    # A full draft (persona fields + 8-12 facts) needs ~1k output tokens; the
+    # default 256 truncated the JSON mid-object and the parse came back empty.
+    llm = SarvamLLMClient(settings.sarvam_api_key, model="sarvam-105b",
+                          max_tokens=1400)
     try:
         draft = await research_website(
             url=url, description=(body.get("description") or "").strip(),
