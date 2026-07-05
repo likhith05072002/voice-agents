@@ -312,46 +312,60 @@ async def _openrouter_search(query: str) -> str | None:
                 json={
                     "model": "perplexity/sonar",
                     "messages": [{"role": "user", "content": (
-                        "Answer concisely and factually in 2-4 sentences, for a "
-                        "voice assistant to read aloud (no markdown, no citations, "
-                        f"no lists): {query}")}],
-                    "max_tokens": 260,
+                        "Give ONLY the key fact needed to answer this, in ONE plain "
+                        "sentence (two at most). No preamble, no lists, no markdown, "
+                        f"no citations, no background: {query}")}],
+                    "max_tokens": 90,
                 })
             r.raise_for_status()
-            return r.json()["choices"][0]["message"]["content"].strip()[:900]
+            return r.json()["choices"][0]["message"]["content"].strip()[:320]
     except Exception:  # noqa: BLE001 — a dead feed must never kill the turn
         return None
 
 
-# Turns that do NOT need a web search: greetings, thanks, backchannel, and
-# questions about the assistant / SonusLabs itself (its own prompt + KB cover
-# those). Everything else that looks like a real question gets a live lookup.
+# A web search is for LIVE / TIME-SENSITIVE facts only. Everything else — general
+# knowledge, definitions, how-things-work, casual chat, jokes, capabilities — the
+# LLM answers itself, conversationally. Searching those made it read out Wikipedia
+# paragraphs for "can you laugh?" and "what is this bullshit?" (heard live). So:
+#   1. never search chitchat / emotional reactions / questions about the assistant
+#   2. only search when the turn clearly needs CURRENT or REAL-TIME data.
 _CHITCHAT_RE = _re.compile(
     r"^\s*(hi|hello|hey|namaste|namaskar|vanakkam|yo|"
-    r"thanks?|thank you|thank u|ok(ay)?|cool|great|nice|good|fine|"
-    r"bye|goodbye|see you|"
+    r"thanks?|thank you|thank u|ok(ay)?|cool|great|nice|good|fine|lol|haha|"
+    r"bye|goodbye|see you|wait|hmm|what\??$|huh|"
     r"how are you|how're you|what'?s up|who are you|your name)\b", _re.IGNORECASE)
 _ABOUT_SELF_RE = _re.compile(
     r"sonus\s*labs|sonuslabs|\byour (company|service|product|pricing|price|plan|"
     r"team|founder|feature|name)|what (can|do|are) you (do|offer|called)|"
-    r"who made you|who built you|about you\b|your name", _re.IGNORECASE)
-# Information-seeking shape: a question word / cue, or a trailing '?'.
-_QUESTION_RE = _re.compile(
-    r"\?|\b(what|who|whose|whom|where|when|why|which|how|"
-    r"tell me|explain|define|describe|is|are|was|were|does|do|did|can|could|"
-    r"list|give me|latest|current|today|now|price of|cost of|meaning of|"
-    r"news|score|weather|population|capital|ceo|president|prime minister)\b",
+    r"can you (laugh|sing|hear|speak|talk|help|do)|are you (a |an )?(bot|robot|human|real|ai)|"
+    r"who made you|who built you|about you\b|this (assistant|receptionist|bot)|"
+    r"bullshit|nonsense|stupid|useless", _re.IGNORECASE)
+# CURRENT / REAL-TIME markers: dated facts, live figures, public officials, or an
+# explicit request to look something up. Kept tight on purpose — a false NEGATIVE
+# just means the LLM answers from its own (usually fine) knowledge.
+_CURRENT_RE = _re.compile(
+    r"\b(today|todays|tonight|right now|currently|current|latest|recent(ly)?|"
+    r"this (week|month|year|morning|evening|weekend)|"
+    r"weather|temperature|forecast|"
+    r"news|headline|breaking|"
+    r"score|who won|winner|winning|match result|"
+    r"stock|share price|sensex|nifty|exchange rate|"
+    r"gold rate|silver rate|price of|rate of|cost of|how much (is|are|does)|"
+    r"prime minister|president|chief minister|\bpm\b|\bceo\b|mayor|governor|"
+    r"20(2[4-9]|3\d))\b", _re.IGNORECASE)
+_EXPLICIT_SEARCH_RE = _re.compile(
+    r"\b(search|look (it|that|this) up|look up|google|find out|check online)\b",
     _re.IGNORECASE)
 
 
 def _wants_web(text: str) -> bool:
-    """True when a caller turn should trigger a live web lookup."""
+    """True only when a caller turn needs CURRENT or REAL-TIME information."""
     t = (text or "").strip()
     if len(t.split()) < 2:
         return False
     if _CHITCHAT_RE.search(t) or _ABOUT_SELF_RE.search(t):
         return False
-    return bool(_QUESTION_RE.search(t))
+    return bool(_CURRENT_RE.search(t) or _EXPLICIT_SEARCH_RE.search(t))
 
 
 def build_assistant_registry() -> ToolRegistry:
@@ -383,8 +397,10 @@ def build_assistant_registry() -> ToolRegistry:
             return None
         ans = await _openrouter_search(current[:240])
         if ans:
-            return (f"Live web answer to the caller's question (use this, read it "
-                    f"naturally, do not add citations): {ans}")
+            return (f"Live web fact (TRUE, as of now): {ans}\nAnswer the caller "
+                    f"using this fact, in ONE short spoken sentence in your own "
+                    f"words — do not read it out formally, do not add citations, "
+                    f"background, or extra detail.")
         return None
 
     # When a turn is going to search, speak this WHILE the search runs.
