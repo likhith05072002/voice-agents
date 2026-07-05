@@ -285,3 +285,122 @@ def build_demo_registry() -> ToolRegistry:
                 return {"error": f"search unavailable: {e}"}
 
     return reg
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SonusLabs general assistant: a powerful, ask-anything voice AI. Where a
+# business receptionist should stay in its lane, this one answers whatever the
+# caller asks — and when the answer needs current or external knowledge it does
+# a LIVE web search (OpenRouter/sonar) instead of guessing. The search is run
+# deterministically by the server (prefetch), not left to model-driven tool
+# selection, which is unreliable under long multilingual context.
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _openrouter_search(query: str) -> str | None:
+    """One live, search-grounded answer from perplexity/sonar (or None)."""
+    import os
+    import httpx
+    from src.config import settings
+    key = settings.openrouter_api_key or os.environ.get("OPENROUTER_API_KEY", "")
+    if not key or not query.strip():
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as c:
+            r = await c.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={"Authorization": f"Bearer {key}"},
+                json={
+                    "model": "perplexity/sonar",
+                    "messages": [{"role": "user", "content": (
+                        "Answer concisely and factually in 2-4 sentences, for a "
+                        "voice assistant to read aloud (no markdown, no citations, "
+                        f"no lists): {query}")}],
+                    "max_tokens": 260,
+                })
+            r.raise_for_status()
+            return r.json()["choices"][0]["message"]["content"].strip()[:900]
+    except Exception:  # noqa: BLE001 — a dead feed must never kill the turn
+        return None
+
+
+# Turns that do NOT need a web search: greetings, thanks, backchannel, and
+# questions about the assistant / SonusLabs itself (its own prompt + KB cover
+# those). Everything else that looks like a real question gets a live lookup.
+_CHITCHAT_RE = _re.compile(
+    r"^\s*(hi|hello|hey|namaste|namaskar|vanakkam|yo|"
+    r"thanks?|thank you|thank u|ok(ay)?|cool|great|nice|good|fine|"
+    r"bye|goodbye|see you|"
+    r"how are you|how're you|what'?s up|who are you|your name)\b", _re.IGNORECASE)
+_ABOUT_SELF_RE = _re.compile(
+    r"sonus\s*labs|sonuslabs|\byour (company|service|product|pricing|price|plan|"
+    r"team|founder|feature|name)|what (can|do|are) you (do|offer|called)|"
+    r"who made you|who built you|about you\b|your name", _re.IGNORECASE)
+# Information-seeking shape: a question word / cue, or a trailing '?'.
+_QUESTION_RE = _re.compile(
+    r"\?|\b(what|who|whose|whom|where|when|why|which|how|"
+    r"tell me|explain|define|describe|is|are|was|were|does|do|did|can|could|"
+    r"list|give me|latest|current|today|now|price of|cost of|meaning of|"
+    r"news|score|weather|population|capital|ceo|president|prime minister)\b",
+    _re.IGNORECASE)
+
+
+def _wants_web(text: str) -> bool:
+    """True when a caller turn should trigger a live web lookup."""
+    t = (text or "").strip()
+    if len(t.split()) < 2:
+        return False
+    if _CHITCHAT_RE.search(t) or _ABOUT_SELF_RE.search(t):
+        return False
+    return bool(_QUESTION_RE.search(t))
+
+
+def build_assistant_registry() -> ToolRegistry:
+    """Tools for the SonusLabs general assistant: live web search on any real
+    question, run deterministically as a prefetch, with a spoken filler hint so
+    the engine can cover the ~1-2s lookup with speech instead of dead air."""
+    reg = ToolRegistry()
+
+    @reg.tool(
+        "web_search",
+        "Search the live internet for a concise, factual answer to anything: "
+        "news, current events, facts, definitions, prices, sports, weather, "
+        "people, places — anything you are not certain about. Returns a short "
+        "answer to read aloud.",
+        {"type": "object", "properties": {"query": {"type": "string"}},
+         "required": ["query"]},
+    )
+    async def web_search(args: dict) -> dict:
+        ans = await _openrouter_search(str(args.get("query", "")))
+        return {"answer": ans} if ans else {"error": "search unavailable"}
+
+    @reg.prefetcher
+    async def live_answer_prefetch(text: str):
+        """Any real question -> fetch a live web answer and inject it, so the
+        assistant answers from current reality and never hallucinates."""
+        # The probe is 'prev_user\ncurrent'; decide on the CURRENT turn (last line).
+        current = text.rsplit("\n", 1)[-1]
+        if not _wants_web(current):
+            return None
+        ans = await _openrouter_search(current[:240])
+        if ans:
+            return (f"Live web answer to the caller's question (use this, read it "
+                    f"naturally, do not add citations): {ans}")
+        return None
+
+    # When a turn is going to search, speak this WHILE the search runs.
+    _FILLERS = [
+        "Sure, let me look that up for you.",
+        "Good question, let me check that.",
+        "One moment, let me find that out.",
+        "Let me pull that up for you real quick.",
+    ]
+
+    def filler_hint(text: str):
+        if not _wants_web(text):
+            return None
+        # Vary by length so it isn't the same line every time (no RNG on the
+        # hot path); different questions get different fillers.
+        return _FILLERS[len(text) % len(_FILLERS)]
+
+    reg.set_filler_hint(filler_hint)
+    return reg

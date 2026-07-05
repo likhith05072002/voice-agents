@@ -72,6 +72,21 @@ class ToolRegistry:
         self._prefetchers.append(fn)
         return fn
 
+    def set_filler_hint(self, fn) -> None:
+        """Register a fast, side-effect-free predicate ``fn(text) -> str | None``.
+        When a turn is going to trigger a SLOW prefetch (e.g. a live web search),
+        this returns a short spoken filler ("one second, let me check") so the
+        engine can cover the lookup latency with speech instead of dead air. It
+        must be cheap — it runs on the hot path before the prefetch."""
+        self._filler_hint = fn
+
+    def filler_hint(self, text: str) -> str | None:
+        fn = getattr(self, "_filler_hint", None)
+        try:
+            return fn(text) if fn else None
+        except Exception:  # noqa: BLE001 — a filler decision must never break a turn
+            return None
+
     async def prefetch(self, text: str) -> list[str]:
         out: list[str] = []
         for fn in getattr(self, "_prefetchers", []):

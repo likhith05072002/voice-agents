@@ -605,3 +605,49 @@ def test_self_repeat_guard_is_same_language_only():
         "content": "ನಾವು ಆಸ್ಟಿನ್, ಟೆಕ್ಸಾಸ್ ನಲ್ಲಿ ನೆಲೆಸಿರುವ ತಂತ್ರಜ್ಞಾನ ಸಲಹಾ ಕಂಪನಿ."})
     assert e._is_self_repeat(
         "ನಾವು ಆಸ್ಟಿನ್, ಟೆಕ್ಸಾಸ್ ನಲ್ಲಿ ನೆಲೆಸಿರುವ ತಂತ್ರಜ್ಞಾನ ಸಲಹಾ ಕಂಪನಿ.")
+
+
+async def test_assistant_filler_speaks_and_live_data_injected(monkeypatch):
+    """A question turn on a search-enabled agent: the filler is spoken WHILE the
+    (mocked) search runs, the live answer is injected into the LLM system prompt,
+    and the ephemeral filler never enters history."""
+    from src.agent.tools import ToolRegistry
+
+    reg = ToolRegistry()
+
+    @reg.prefetcher
+    async def live(text: str):
+        return "Live web answer to the caller's question: Paris is the capital of France."
+
+    reg.set_filler_hint(lambda t: "Sure, let me look that up for you." if "capital" in t else None)
+
+    captured = {}
+
+    class RecordingLLM(FakeLLM):
+        async def generate_sentences(self, messages, queue):
+            captured["sys"] = messages[0]["content"]
+            return await super().generate_sentences(messages, queue)
+
+    stt = FakeSTT()
+    llm = RecordingLLM(["The capital of France is Paris. "])
+    tts = FakeTTS([160, 320])
+    transcripts = []
+    engine = _engine(stt, llm, tts, [], frame_pace_s=0, tools=reg,
+                     on_transcript=lambda role, text: transcripts.append((role, text)))
+
+    run = asyncio.create_task(engine.run())
+    await stt.q.put(TranscriptEvent(text="what is the capital of France",
+                                    is_final=True, language="en", timestamp=0.0))
+    await stt.q.put(None)
+    await asyncio.wait_for(run, timeout=5.0)
+
+    # filler was spoken (emitted to the live transcript)…
+    assert any("look that up" in t for _r, t in transcripts)
+    # …but is NOT in history — history holds only the user turn + the real answer
+    assert engine.history == [
+        {"role": "user", "content": "what is the capital of France"},
+        {"role": "assistant", "content": "The capital of France is Paris. "},
+    ]
+    # the live web answer reached the model
+    assert "Paris is the capital of France" in captured["sys"]
+    assert "LIVE DATA" in captured["sys"]

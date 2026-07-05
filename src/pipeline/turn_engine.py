@@ -1095,7 +1095,25 @@ class TurnEngine:
         if self.tools is not None and hasattr(self.tools, "prefetch"):
             prev_user = next((m["content"] for m in reversed(self.history[:-1])
                               if m.get("role") == "user"), "")
-            live = await self.tools.prefetch(f"{prev_user}\n{transcript}")
+            probe = f"{prev_user}\n{transcript}"
+            # If the tools know this turn needs a SLOW live lookup (web search),
+            # cover its latency by speaking a short filler CONCURRENTLY with the
+            # search — otherwise the caller hears ~1-2s of dead air. The filler
+            # is ephemeral (never enters history). Uses the same safe TTS path
+            # as the greeting, so audio format/framing is identical.
+            hint = (self.tools.filler_hint(transcript)
+                    if hasattr(self.tools, "filler_hint") else None)
+            if hint:
+                self.state = State.SPEAKING
+                prefetch_task = asyncio.create_task(self.tools.prefetch(probe))
+                try:
+                    await self._speak(hint, ephemeral=True)
+                    live = await prefetch_task
+                except asyncio.CancelledError:
+                    prefetch_task.cancel()
+                    raise
+            else:
+                live = await self.tools.prefetch(probe)
             if live:
                 sys_content += ("\n\nLIVE DATA fetched right now — answer with "
                                 "these EXACT figures and facts, never estimate:"
@@ -1173,14 +1191,18 @@ class TurnEngine:
 
     # ─── audio ───
 
-    async def _speak(self, text: str) -> None:
+    async def _speak(self, text: str, *, ephemeral: bool = False) -> None:
         """Synthesize one chunk of text and stream its frames + a played-mark.
 
         Completion is detected by the provider's completion event OR by a
         sustained gap after the last audio chunk. Live calls showed Sarvam's
         completion event sometimes never arrives — without the gap fallback the
         turn hung inside this loop forever and every answer was truncated by
-        the caller's next question."""
+        the caller's next question.
+
+        ``ephemeral=True`` speaks a throwaway line (a search filler) that must
+        NOT enter history: it emits no _SpokenMark, so the pump never appends it
+        to ``_spoken`` and the model never believes it 'said' the filler."""
         # Real-time transcript feed: emit each sentence as it heads to TTS so
         # live viewers and the voice tester see the answer as it is spoken.
         # (History still records only what actually PLAYED — different concern.)
@@ -1222,7 +1244,7 @@ class TurnEngine:
             for frame in self._to_frames(carry):
                 await self._playback_queue.put(frame)
                 emitted = True
-        if emitted:
+        if emitted and not ephemeral:
             # Pump appends this text to _spoken only after its frames are sent.
             await self._playback_queue.put(_SpokenMark(text))
 

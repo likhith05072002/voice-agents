@@ -30,13 +30,14 @@ export function Landing() {
     return () => clearInterval(t);
   }, []);
 
-  // Demo with a production-tuned agent, never the generic "default" one —
-  // its untuned persona makes the first impression noticeably worse.
-  const tuned = ["cocolevio", "jewellery", "dental", "cafe"];
+  // The hero demos the SonusLabs assistant itself — a general, ask-anything AI
+  // with live web search — not a customer's receptionist. Fall back to a tuned
+  // business agent, never the generic "default" one.
+  const preferred = ["sonuslabs", "cocolevio", "jewellery", "dental", "cafe"];
   const demo =
-    tuned.find((t) => agents.some((a) => a.agent_id === t)) ||
+    preferred.find((t) => agents.some((a) => a.agent_id === t)) ||
     agents.find((a) => a.agent_id !== "default")?.agent_id ||
-    agents[0]?.agent_id || "cocolevio";
+    agents[0]?.agent_id || "sonuslabs";
   const playVoice = (voice: string) => {
     if (!audioRef.current) audioRef.current = new Audio();
     audioRef.current.src = api.voiceSampleUrl(voice);
