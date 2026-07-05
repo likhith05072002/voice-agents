@@ -144,11 +144,19 @@ def _check_admin(request: Request):
     return None
 
 
+# Platform/internal agents that are NOT a customer's workspace agents, so they
+# are hidden from the console listing (the fallback 'default' and the public
+# landing-demo assistant 'sonuslabs'). They still resolve for calls — only the
+# console list is filtered. Phase 4 (accounts) replaces this with tenant scoping.
+_CONSOLE_HIDDEN_AGENTS = {"default", "sonuslabs"}
+
+
 @app.get("/agents")
 async def list_agents(request: Request):
     if (err := _check_admin(request)) is not None:
         return err
-    return {"agents": [a.to_dict() for a in _agent_manager.list()]}
+    return {"agents": [a.to_dict() for a in _agent_manager.list()
+                       if a.agent_id not in _CONSOLE_HIDDEN_AGENTS]}
 
 
 @app.get("/agents/{agent_id}")
@@ -409,9 +417,11 @@ async def live_transcript(since: float = 0.0):
 
 @app.get("/agents-lite")
 async def agents_lite():
-    """Public id+name list for the dashboard's call-me selector (no secrets)."""
+    """Public id+name list for the console (no secrets). Internal/platform
+    agents (default, sonuslabs) are hidden — see _CONSOLE_HIDDEN_AGENTS."""
     return {"agents": [{"agent_id": a.agent_id, "name": a.name or a.agent_id}
-                       for a in _agent_store.all()]}
+                       for a in _agent_store.all()
+                       if a.agent_id not in _CONSOLE_HIDDEN_AGENTS]}
 
 
 class CallMeRequest(BaseModel):

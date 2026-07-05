@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Nav } from "../components/Nav";
 import { CallPanel } from "../components/CallPanel";
-import { api, AgentLite } from "../api";
+import { api } from "../api";
 import { C, serif, LANGS } from "../theme";
 
 const TAGLINES = [
@@ -15,13 +15,11 @@ const TAGLINES = [
 
 export function Landing() {
   const nav = useNavigate();
-  const [agents, setAgents] = useState<AgentLite[]>([]);
   const [teaser, setTeaser] = useState("");
   const [tag, setTag] = useState(0);
   const [tagVis, setTagVis] = useState(true);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  useEffect(() => { api.agentsLite().then((r) => setAgents(r.agents)).catch(() => {}); }, []);
   useEffect(() => {
     const t = setInterval(() => {
       setTagVis(false);
@@ -31,11 +29,8 @@ export function Landing() {
   }, []);
 
   // The hero always demos the SonusLabs assistant itself — a general,
-  // ask-anything AI with live web search. Fall back to any non-default agent.
-  const demo =
-    (agents.some((a) => a.agent_id === "sonuslabs") && "sonuslabs") ||
-    agents.find((a) => a.agent_id !== "default")?.agent_id ||
-    agents[0]?.agent_id || "sonuslabs";
+  // ask-anything AI with live web search (a fixed, known product agent).
+  const demo = "sonuslabs";
   const playVoice = (voice: string) => {
     if (!audioRef.current) audioRef.current = new Audio();
     audioRef.current.src = api.voiceSampleUrl(voice);

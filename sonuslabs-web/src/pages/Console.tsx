@@ -60,17 +60,34 @@ export function Console() {
 
 /* ─── AGENTS ─── */
 function AgentsTab() {
+  const nav = useNavigate();
   const [agents, setAgents] = useState<AgentLite[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [sel, setSel] = useState<string | null>(null);
-  const reload = () => api.agentsLite().then((r) => setAgents(r.agents)).catch(() => {});
+  const reload = () => api.agentsLite().then((r) => { setAgents(r.agents); setLoaded(true); })
+    .catch(() => setLoaded(true));
   useEffect(() => { reload(); }, []);
 
   if (sel) return <AgentDetail id={sel} onClose={() => { setSel(null); reload(); }} />;
+  if (loaded && agents.length === 0) return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+      minHeight: "60vh", textAlign: "center" }}>
+      <div style={{ width: 56, height: 56, borderRadius: 16, background: C.darkCard, border: `1px solid ${C.darkLine}`,
+        display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 18 }}>
+        <div style={{ width: 16, height: 16, borderRadius: "50%", background: C.accent }} /></div>
+      <h1 style={{ fontFamily: serif, fontWeight: 400, fontSize: 32, marginBottom: 8 }}>No agents yet</h1>
+      <p style={{ fontSize: 15, color: C.darkMuted, maxWidth: 380, lineHeight: 1.5, marginBottom: 22 }}>
+        Create your first AI receptionist — paste your website and we'll research your business and draft it for you.</p>
+      <button onClick={() => nav("/create")} style={{ fontSize: 15, fontWeight: 600, color: C.ink,
+        background: C.accent, border: "none", borderRadius: 12, padding: "13px 24px", cursor: "pointer" }}>
+        Create your first agent →</button>
+    </div>
+  );
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
         <h1 style={{ fontFamily: serif, fontWeight: 400, fontSize: 30 }}>Agents</h1>
-        <span style={{ fontSize: 13, color: C.darkMuted }}>{agents.length} agents</span>
+        <span style={{ fontSize: 13, color: C.darkMuted }}>{agents.length} {agents.length === 1 ? "agent" : "agents"}</span>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(230px,1fr))", gap: 16 }}>
         {agents.map((a) => (
