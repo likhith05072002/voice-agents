@@ -148,6 +148,31 @@ async def get_agent(agent_id: str, request: Request):
     return a.to_dict()
 
 
+@app.post("/onboard/research")
+async def onboard_research(request: Request):
+    """Website URL (+ optional behaviour description) -> draft agent config.
+    The frontend edits the draft, then creates it via POST /agents."""
+    body = await request.json()
+    url = (body.get("website_url") or "").strip()
+    if not url:
+        return JSONResponse({"error": "website_url required"}, status_code=400)
+    from src.onboarding import research_website
+    llm = SarvamLLMClient(settings.sarvam_api_key, model="sarvam-105b")
+    try:
+        draft = await research_website(
+            url=url, description=(body.get("description") or "").strip(),
+            complete_json=llm.complete_json,
+            openrouter_key=settings.openrouter_api_key)
+        return draft
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+    except Exception as e:  # noqa: BLE001
+        logger.error("onboard.failed", error=str(e))
+        return JSONResponse({"error": "research failed; try again"}, status_code=500)
+    finally:
+        await llm.close()
+
+
 def _warm_agent_kb(agent: AgentConfig) -> None:
     """Fire-and-forget translation warm for one agent's docs (content-hash
     cached, so an unchanged doc costs nothing)."""
