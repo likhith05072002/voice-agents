@@ -80,8 +80,11 @@ async def lifespan(app: FastAPI):
                     logger.warning("kb_i18n.warm_failed", agent=a.agent_id,
                                    error=str(e))
     warm_task = asyncio.create_task(_warm_kbs())
+    # Pre-render the voice previews so the demo's play button is instant.
+    samples_task = asyncio.create_task(_warm_voice_samples())
     yield
     warm_task.cancel()
+    samples_task.cancel()
 
 
 app = FastAPI(title="Voice Agent", version="0.8.0", lifespan=lifespan)
@@ -619,32 +622,61 @@ async def telnyx_webhook(request: Request):
 
 VOICE_LAB_CANDIDATES = ["ishita", "priya", "ritu", "neha", "kavya", "shreya",
                         "simran", "tanya"]
-_VOICE_SAMPLE_TEXT = ("Hello! Thank you for calling Cocolevio, this is Ava. "
-                      "How can I help you today? "
-                      "ನಮ್ಮ ಕಂಪನಿ ಟೆಕ್ಸಾಸ್‌ನ ಆಸ್ಟಿನ್‌ನಲ್ಲಿ ನೆಲೆಸಿದೆ. "
-                      "हाँ, हम क्लाउड सेवाएँ भी प्रदान करते हैं।")
 
 
-@app.get("/voice-sample/{voice}")
-async def voice_sample(voice: str):
-    """One fixed multilingual sample line rendered in `voice` (REST, cached) —
-    lets a human pick the most natural voice by ear instead of by docs."""
-    from fastapi.responses import Response
+def _voice_sample_text(voice: str) -> str:
+    """Per-voice self-intro — the voice says its OWN name. Generic SonusLabs
+    branding, NO fixed company anywhere. Short so it renders + plays fast."""
+    name = voice.capitalize()
+    return f"Hi, I'm {name} — welcome to SonusLabs. I can speak eleven Indian languages."
+
+
+# Rendered WAV bytes per voice, built once and reused so the preview button is
+# instant (was ~1-2s of live TTS on every click).
+_voice_sample_cache: dict[str, bytes] = {}
+
+
+async def _render_voice_sample(voice: str) -> bytes:
     from src.testing.caller import render_utterances
     import io
     import wave as _wave
-    if voice not in KNOWN_VOICES:
-        return JSONResponse({"error": f"unknown voice '{voice}'"}, status_code=404)
-    audio = await render_utterances([_VOICE_SAMPLE_TEXT], "en-IN", voice,
-                                    settings.sarvam_api_key)
-    pcm = audio[_VOICE_SAMPLE_TEXT]
+    text = _voice_sample_text(voice)
+    audio = await render_utterances([text], "en-IN", voice, settings.sarvam_api_key)
+    pcm = audio[text]
     buf = io.BytesIO()
     with _wave.open(buf, "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)
         w.setframerate(8000)
         w.writeframes(pcm)
-    return Response(content=buf.getvalue(), media_type="audio/wav")
+    return buf.getvalue()
+
+
+async def _warm_voice_samples() -> None:
+    """Pre-render every lab voice at startup, in PARALLEL, so all previews are
+    warm within a few seconds (sequential took ~5s each = ~40s)."""
+    async def _one(v: str) -> None:
+        try:
+            _voice_sample_cache[v] = await _render_voice_sample(v)
+        except Exception as e:  # noqa: BLE001 — best-effort; endpoint re-renders on miss
+            logger.warning("voice_sample.warm_failed", voice=v, error=str(e))
+    await asyncio.gather(*(_one(v) for v in VOICE_LAB_CANDIDATES))
+    logger.info("voice_samples.warmed", count=len(_voice_sample_cache))
+
+
+@app.get("/voice-sample/{voice}")
+async def voice_sample(voice: str):
+    """Per-voice self-intro rendered in `voice`, served from a warm cache so the
+    preview button is instant."""
+    from fastapi.responses import Response
+    if voice not in KNOWN_VOICES:
+        return JSONResponse({"error": f"unknown voice '{voice}'"}, status_code=404)
+    wav = _voice_sample_cache.get(voice)
+    if wav is None:                       # cache miss (cold start): render + store
+        wav = await _render_voice_sample(voice)
+        _voice_sample_cache[voice] = wav
+    return Response(content=wav, media_type="audio/wav",
+                    headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.get("/voice-lab")

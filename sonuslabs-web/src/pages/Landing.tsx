@@ -30,12 +30,10 @@ export function Landing() {
     return () => clearInterval(t);
   }, []);
 
-  // The hero demos the SonusLabs assistant itself — a general, ask-anything AI
-  // with live web search — not a customer's receptionist. Fall back to a tuned
-  // business agent, never the generic "default" one.
-  const preferred = ["sonuslabs", "cocolevio", "jewellery", "dental", "cafe"];
+  // The hero always demos the SonusLabs assistant itself — a general,
+  // ask-anything AI with live web search. Fall back to any non-default agent.
   const demo =
-    preferred.find((t) => agents.some((a) => a.agent_id === t)) ||
+    (agents.some((a) => a.agent_id === "sonuslabs") && "sonuslabs") ||
     agents.find((a) => a.agent_id !== "default")?.agent_id ||
     agents[0]?.agent_id || "sonuslabs";
   const playVoice = (voice: string) => {
@@ -90,17 +88,16 @@ export function Landing() {
         <CallPanel agentId={demo} subtitle="live demo · talk to it" voicePicker />
       </div>
 
-      {/* TRUST */}
-      {agents.length > 0 && (
-        <div style={{ maxWidth: 1200, margin: "26px auto 0", padding: "0 28px" }}>
-          <div style={{ fontSize: 12, letterSpacing: ".14em", textTransform: "uppercase", color: "#A79E8B",
-            textAlign: "center", marginBottom: 16 }}>Answering calls for</div>
-          <div style={{ display: "flex", gap: 38, justifyContent: "center", flexWrap: "wrap",
-            fontFamily: serif, fontSize: 21, color: "#B9B0A0" }}>
-            {agents.slice(0, 5).map((a) => <span key={a.agent_id}>{a.name}</span>)}
-          </div>
+      {/* TRUST — business categories, not named companies (brand-neutral) */}
+      <div style={{ maxWidth: 1200, margin: "26px auto 0", padding: "0 28px" }}>
+        <div style={{ fontSize: 12, letterSpacing: ".14em", textTransform: "uppercase", color: "#A79E8B",
+          textAlign: "center", marginBottom: 16 }}>Built for every kind of business</div>
+        <div style={{ display: "flex", gap: 34, justifyContent: "center", flexWrap: "wrap",
+          fontFamily: serif, fontSize: 21, color: "#B9B0A0" }}>
+          {["Jewellers", "Clinics", "Cafés & restaurants", "Real estate", "Salons", "Retail"]
+            .map((c) => <span key={c}>{c}</span>)}
         </div>
-      )}
+      </div>
 
       {/* ONBOARDING TEASER */}
       <div style={{ maxWidth: 1200, margin: "78px auto 0", padding: "0 28px" }}>
