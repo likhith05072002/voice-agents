@@ -157,8 +157,8 @@ class Settings(BaseSettings):
 
     # ─── Session / silence handling ───
     enable_idle: bool = True
-    idle_reprompt_ms: int = 10000    # re-prompt a silent caller after this
-    idle_hangup_ms: int = 30000      # end the call after this much silence
+    idle_reprompt_ms: int = 20000    # re-prompt a silent caller after this
+    idle_hangup_ms: int = 45000      # end the call after this much silence
     idle_reprompt_text: str = "Are you still there?"
     # Switch the TTS voice language to match the language the caller is speaking.
     enable_language_switch: bool = True
