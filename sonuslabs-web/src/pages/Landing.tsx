@@ -78,7 +78,7 @@ export function Landing() {
               textDecoration: "none" }}>See pricing</a>
           </div>
           <div style={{ marginTop: 20, fontSize: 13.5, color: C.faint }}>
-            No app to install · from ₹3/min all-in · answers on a real phone number or your website
+            No app to install · from ₹3/min · bring your own number, or we'll give you one
           </div>
         </div>
 
@@ -266,7 +266,8 @@ export function Landing() {
           ))}
         </div>
         <p style={{ textAlign: "center", fontSize: 13, color: C.faint, marginTop: 18 }}>
-          All-in price includes speech, AI, and telephony. Web-widget calls are ₹2.50/min. Launch pricing — indicative.
+          Pay-as-you-go is the voice AI only — you connect your own carrier (Telnyx / Twilio). Business includes your
+          phone number. Prices in INR, billed per second. Launch pricing — indicative.
         </p>
       </div>
 
@@ -296,13 +297,13 @@ export function Landing() {
 }
 
 const PLANS = [
-  { name: "Starter", price: "₹3", unit: "/min", tag: "Pay as you go. No monthly fee.", featured: false,
-    cta: "Start free", features: ["All 11 Indian languages", "Web + phone calls", "Live prices, date & web search",
-      "Interruption handling", "Call transcripts & recordings"] },
-  { name: "Business", price: "₹2,999", unit: "/mo", tag: "Includes 1,200 minutes, then ₹2.50/min.", featured: true,
-    cta: "Choose Business", features: ["Everything in Starter", "Your own phone number", "Priority voices",
-      "Analytics dashboard", "Appointment booking flows"] },
+  { name: "Pay as you go", price: "₹3", unit: "/min", tag: "Bring your own number (Telnyx / Twilio). No monthly fee.", featured: false,
+    cta: "Start free", features: ["Voice AI API — you connect your carrier", "All 11 Indian languages",
+      "Live prices, date & web search", "Interruption handling", "Call transcripts & recordings"] },
+  { name: "Business", price: "₹299", unit: "/mo + ₹3.5/min", tag: "We give you a phone number — nothing to set up.", featured: true,
+    cta: "Choose Business", features: ["Everything in Pay as you go", "Your own phone number, included",
+      "Console: manage agents & calls", "Analytics dashboard", "Appointment booking flows"] },
   { name: "Enterprise", price: "Custom", unit: "", tag: "For high volume & multi-location.", featured: false,
-    cta: "Talk to us", features: ["Volume rates below ₹2.50/min", "Dedicated hosting & SLA", "On-prem option",
+    cta: "Talk to us", features: ["Volume per-minute rates", "Dedicated hosting & SLA", "On-prem option",
       "CRM / booking integrations", "Priority support"] },
 ];
