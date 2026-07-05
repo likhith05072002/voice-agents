@@ -665,7 +665,7 @@ async def web_call(websocket: WebSocket):
         await websocket.close(code=1013)
         return
 
-    stt = llm = tts = engine = engine_task = None
+    stt = llm = tts = engine = engine_task = cap_task = None
     try:
         agent = _agent_store.resolve(agent_id=websocket.query_params.get("agent_id"))
         logger.info("webcall.started", agent=agent.agent_id)
@@ -711,6 +711,32 @@ async def web_call(websocket: WebSocket):
         )
         engine_task = asyncio.create_task(engine.run())
 
+        # Demo time cap (sonuslabs.ai): enforced HERE on the server so a user
+        # cannot talk all day or bypass it by editing the client. Tell the
+        # browser the limit up front so its countdown matches; a watchdog ends
+        # the call at the cap with a distinguishable 'call_end' frame.
+        cap_s = settings.web_call_max_seconds
+        if cap_s and cap_s > 0:
+            await websocket.send_text(json.dumps({"type": "call_start", "max_seconds": cap_s}))
+
+            async def _time_cap() -> None:
+                try:
+                    await asyncio.sleep(cap_s)
+                except asyncio.CancelledError:
+                    return
+                logger.info("webcall.time_limit", agent=agent.agent_id, seconds=cap_s)
+                try:
+                    await websocket.send_text(
+                        json.dumps({"type": "call_end", "reason": "time_limit"}))
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    await websocket.close(code=1000)
+                except Exception:  # noqa: BLE001
+                    pass
+
+            cap_task = asyncio.create_task(_time_cap())
+
         # Reader: browser PCM16-16k -> local VAD (20ms frames) + STT.
         FRAME16 = 640                    # 20ms of PCM16 @16k
         buf = b""
@@ -747,6 +773,12 @@ async def web_call(websocket: WebSocket):
     except Exception as e:  # noqa: BLE001
         logger.error("webcall.error", error=str(e))
     finally:
+        if cap_task is not None:
+            cap_task.cancel()
+            try:
+                await cap_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
         if engine_task is not None:
             engine_task.cancel()
             try:

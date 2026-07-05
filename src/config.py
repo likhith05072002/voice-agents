@@ -160,6 +160,9 @@ class Settings(BaseSettings):
     idle_reprompt_ms: int = 20000    # re-prompt a silent caller after this
     idle_hangup_ms: int = 45000      # end the call after this much silence
     idle_reprompt_text: str = "Are you still there?"
+    # Hard cap on a single browser web-call (the sonuslabs.ai demo). 0 disables.
+    # Enforced server-side so it cannot be bypassed by editing the client.
+    web_call_max_seconds: int = 180
     # Switch the TTS voice language to match the language the caller is speaking.
     enable_language_switch: bool = True
 

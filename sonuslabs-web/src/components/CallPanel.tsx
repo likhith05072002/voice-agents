@@ -9,17 +9,21 @@ import { C, mono } from "../theme";
 // call subtree while audio is running; the orb animates via levelRef, not props.
 export const CallPanel = memo(function CallPanel({ agentId, subtitle, orbSize = 210 }:
   { agentId: string; subtitle?: string; orbSize?: number }) {
-  const { status, captions, levelRef, start, stop } = useWebCall();
+  const { status, captions, levelRef, remaining, endedReason, start, stop } = useWebCall();
   const capRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => () => stop(), [stop]); // hang up on unmount
   useEffect(() => {
     if (capRef.current) capRef.current.scrollTop = capRef.current.scrollHeight;
   }, [captions]);
 
+  const low = remaining !== null && remaining <= 20;
+  const clock = remaining === null ? null
+    : `${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, "0")}`;
   const statusColor =
-    status === "live" ? C.green : status === "connecting" ? C.accent : C.faint;
+    status === "live" ? (low ? C.red : C.green) : status === "connecting" ? C.accent : C.faint;
   const statusLabel =
-    status === "live" ? "live" : status === "connecting" ? "connecting…" : "idle";
+    status === "live" ? (clock ? `${clock} left` : "live")
+      : status === "connecting" ? "connecting…" : "idle";
   const center =
     status === "idle" ? "Tap to talk" : status === "connecting" ? "…" : "Listening";
 
@@ -55,11 +59,22 @@ export const CallPanel = memo(function CallPanel({ agentId, subtitle, orbSize = 
         </div>
       </div>
 
+      {endedReason === "time_limit" && status === "idle" && (
+        <div style={{ textAlign: "center", background: "#FBE8E2", border: "1px solid #F1C9BD",
+          color: "#B24A2E", borderRadius: 10, padding: "8px 12px", fontSize: 12.5, fontWeight: 600,
+          margin: "0 2px 10px" }}>
+          ⏱ Demo time's up — 3-minute limit. Tap the orb to talk again.
+        </div>
+      )}
       <div ref={capRef} style={{ minHeight: 132, maxHeight: 210, overflowY: "auto",
         display: "flex", flexDirection: "column", gap: 8, padding: "6px 2px 2px" }}>
         {captions.length === 0 ? (
           <div style={{ textAlign: "center", color: "#A79E8B", fontSize: 13, padding: "30px 10px", lineHeight: 1.5 }}>
-            Tap the orb and say hello.<br />She answers in English — reply in हिंदी and she'll follow.
+            {endedReason === "time_limit" ? (
+              <>Demo time's up — 3-minute limit.<br />Tap the orb to start a new call.</>
+            ) : (
+              <>Tap the orb and say hello.<br />She answers in English — reply in हिंदी and she'll follow.</>
+            )}
           </div>
         ) : captions.map((c, i) => (
           <div key={i} style={{

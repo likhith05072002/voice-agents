@@ -18,6 +18,8 @@ export interface Caption { role: "user" | "assistant"; text: string }
 export function useWebCall() {
   const [status, setStatus] = useState<CallStatus>("idle");
   const [captions, setCaptions] = useState<Caption[]>([]);
+  const [remaining, setRemaining] = useState<number | null>(null); // seconds left, null = uncapped
+  const [endedReason, setEndedReason] = useState<"time_limit" | null>(null);
   // hot-path outputs — read these in rAF loops, never via React state
   const levelRef = useRef(0);
   const speakingRef = useRef<"agent" | "user" | null>(null);
@@ -26,6 +28,7 @@ export function useWebCall() {
   const ctx = useRef<AudioContext | null>(null);
   const stream = useRef<MediaStream | null>(null);
   const proc = useRef<ScriptProcessorNode | null>(null);
+  const ticker = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stop = useCallback(() => {
     const sock = ws.current; ws.current = null;
@@ -33,13 +36,15 @@ export function useWebCall() {
     proc.current?.disconnect(); proc.current = null;
     stream.current?.getTracks().forEach((t) => t.stop()); stream.current = null;
     ctx.current?.close().catch(() => {}); ctx.current = null;
+    if (ticker.current) { clearInterval(ticker.current); ticker.current = null; }
     levelRef.current = 0; speakingRef.current = null;
+    setRemaining(null);
     setStatus("idle");
   }, []);
 
   const start = useCallback(async (agentId: string) => {
     if (ws.current) { stop(); return; }
-    setStatus("connecting"); setCaptions([]);
+    setStatus("connecting"); setCaptions([]); setEndedReason(null); setRemaining(null);
     let ms: MediaStream;
     try {
       ms = await navigator.mediaDevices.getUserMedia({
@@ -64,8 +69,22 @@ export function useWebCall() {
     let playSamples = 0, playEpoch = 0; // sample-exact schedule: no float drift
     socket.onmessage = (e) => {
       if (typeof e.data === "string") {
-        const m = JSON.parse(e.data) as Caption;
-        if (m.text?.trim()) setCaptions((c) => [...c, m]); // few per turn — fine
+        const m = JSON.parse(e.data) as any;
+        // Control frames from the server (demo time cap).
+        if (m.type === "call_start" && m.max_seconds) {
+          setRemaining(m.max_seconds);
+          if (ticker.current) clearInterval(ticker.current);
+          ticker.current = setInterval(() => {
+            setRemaining((r) => (r === null ? r : Math.max(0, r - 1)));
+          }, 1000);
+          return;
+        }
+        if (m.type === "call_end") {
+          setEndedReason(m.reason === "time_limit" ? "time_limit" : null);
+          stop();
+          return;
+        }
+        if (m.text?.trim()) setCaptions((c) => [...c, m as Caption]); // few per turn
         return;
       }
       // agent audio: PCM16 mono 16k — decode + schedule, NO state updates
@@ -124,5 +143,5 @@ export function useWebCall() {
     node.connect(mute); mute.connect(audioCtx.destination);
   }, [stop]);
 
-  return { status, captions, levelRef, speakingRef, start, stop };
+  return { status, captions, levelRef, speakingRef, remaining, endedReason, start, stop };
 }
