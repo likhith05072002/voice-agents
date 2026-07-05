@@ -1,14 +1,18 @@
 import { useEffect, useRef } from "react";
 
 // The signature Call Orb: breathes when idle, blooms into a live ring driven
-// by `level` (0..1) when speaking. Accent = marigold, dark core.
-export function Orb({ size = 210, level = 0, active = false }:
-  { size?: number; level?: number; active?: boolean }) {
+// by audio energy when speaking. Accent = marigold, dark core.
+// Energy comes in via `levelRef` (a mutable ref written by the audio hot path)
+// and is read inside the rAF loop — zero React re-renders per audio chunk.
+// `level` is a static fallback for decorative orbs (e.g. the research spinner).
+export function Orb({ size = 210, level = 0, levelRef, active = false }: {
+  size?: number;
+  level?: number;
+  levelRef?: React.MutableRefObject<number>;
+  active?: boolean;
+}) {
   const ref = useRef<HTMLCanvasElement | null>(null);
-  const lv = useRef(0);
   const raf = useRef(0);
-
-  useEffect(() => { lv.current += (level - lv.current) * 0.35; }, [level]);
 
   useEffect(() => {
     const cv = ref.current; if (!cv) return;
@@ -17,13 +21,16 @@ export function Orb({ size = 210, level = 0, active = false }:
     const g = cv.getContext("2d")!;
     g.scale(dpr, dpr);
     let phase = 0;
+    let lv = 0;
 
     const draw = () => {
+      const target = levelRef ? levelRef.current : level;
+      lv += (target - lv) * 0.25; // smooth the energy
       const cx = size / 2, cy = size / 2;
       g.clearRect(0, 0, size, size);
       phase += 0.02;
       const breathe = active ? 0 : Math.sin(phase) * 0.02 + 0.02;
-      const e = Math.min(1, lv.current * 2.2);
+      const e = Math.min(1, lv * 2.2);
       const base = size * 0.30;
 
       // outer glow rings pulse to energy
@@ -64,7 +71,7 @@ export function Orb({ size = 210, level = 0, active = false }:
     };
     draw();
     return () => cancelAnimationFrame(raf.current);
-  }, [size, active]);
+  }, [size, active, level, levelRef]);
 
   return <canvas ref={ref} style={{ width: size, height: size, display: "block" }} />;
 }

@@ -30,7 +30,13 @@ export function Landing() {
     return () => clearInterval(t);
   }, []);
 
-  const demo = agents[0]?.agent_id || "cocolevio";
+  // Demo with a production-tuned agent, never the generic "default" one —
+  // its untuned persona makes the first impression noticeably worse.
+  const tuned = ["cocolevio", "jewellery", "dental", "cafe"];
+  const demo =
+    tuned.find((t) => agents.some((a) => a.agent_id === t)) ||
+    agents.find((a) => a.agent_id !== "default")?.agent_id ||
+    agents[0]?.agent_id || "cocolevio";
   const playVoice = (voice: string) => {
     if (!audioRef.current) audioRef.current = new Audio();
     audioRef.current.src = api.voiceSampleUrl(voice);
