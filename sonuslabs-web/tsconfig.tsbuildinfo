@@ -1,0 +1,1 @@
+{"root":["./src/api.ts","./src/main.tsx","./src/theme.ts","./src/usewebcall.ts","./src/vite-env.d.ts","./src/components/callpanel.tsx","./src/components/nav.tsx","./src/components/orb.tsx","./src/pages/console.tsx","./src/pages/create.tsx","./src/pages/landing.tsx"],"version":"5.9.3"}
