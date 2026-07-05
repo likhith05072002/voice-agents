@@ -42,7 +42,7 @@ export function useWebCall() {
     setStatus("idle");
   }, []);
 
-  const start = useCallback(async (agentId: string) => {
+  const start = useCallback(async (agentId: string, voice?: string) => {
     if (ws.current) { stop(); return; }
     setStatus("connecting"); setCaptions([]); setEndedReason(null); setRemaining(null);
     let ms: MediaStream;
@@ -58,7 +58,7 @@ export function useWebCall() {
     const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
     ctx.current = audioCtx;
 
-    const socket = new WebSocket(api.webCallUrl(agentId));
+    const socket = new WebSocket(api.webCallUrl(agentId, voice));
     socket.binaryType = "arraybuffer";
     ws.current = socket;
 

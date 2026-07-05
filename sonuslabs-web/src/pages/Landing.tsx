@@ -87,7 +87,7 @@ export function Landing() {
         </div>
 
         {/* LIVE demo call */}
-        <CallPanel agentId={demo} subtitle="live demo · talk to it" />
+        <CallPanel agentId={demo} subtitle="live demo · talk to it" voicePicker />
       </div>
 
       {/* TRUST */}

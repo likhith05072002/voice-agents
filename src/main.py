@@ -677,10 +677,14 @@ async def web_call(websocket: WebSocket):
                               model=agent.llm_model or settings.sarvam_llm_model)
         tts = SarvamTTSClient(settings.sarvam_api_key, model=settings.sarvam_tts_model,
                               pace=agent.voice_pace)
+        # Optional per-call voice override (the demo's voice dropdown) — only a
+        # known lab voice is honoured, otherwise fall back to the agent's voice.
+        req_voice = websocket.query_params.get("voice")
+        call_voice = req_voice if req_voice in VOICE_LAB_CANDIDATES else agent.voice
         # Wideband: bulbul synthesizes natively at 24k — the browser has no
         # telephony codec constraint, so it gets 16k PCM (2x the voice quality
         # of the 8k phone channel).
-        await tts.connect(language=agent.language, voice=agent.voice, sample_rate="16000")
+        await tts.connect(language=agent.language, voice=call_voice, sample_rate="16000")
 
         # Coalesce 20ms frames into 80ms batches: 50 tiny buffers/sec made the
         # browser schedule a new AudioBufferSource every 20ms, and the

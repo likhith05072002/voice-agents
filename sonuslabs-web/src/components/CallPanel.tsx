@@ -1,20 +1,33 @@
-import { memo, useEffect, useRef } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { Orb } from "./Orb";
 import { useWebCall } from "../useWebCall";
+import { api } from "../api";
 import { C, mono } from "../theme";
 
 // Reusable "talk to this agent" panel: orb + connect + live dual captions.
 // Wired to the REAL /web-call WebSocket — no fakes.
 // memo()ed so parent-page state flips (taglines etc.) never re-render the
 // call subtree while audio is running; the orb animates via levelRef, not props.
-export const CallPanel = memo(function CallPanel({ agentId, subtitle, orbSize = 210 }:
-  { agentId: string; subtitle?: string; orbSize?: number }) {
+export const CallPanel = memo(function CallPanel({ agentId, subtitle, orbSize = 210, voicePicker }:
+  { agentId: string; subtitle?: string; orbSize?: number; voicePicker?: boolean }) {
   const { status, captions, levelRef, remaining, endedReason, start, stop } = useWebCall();
   const capRef = useRef<HTMLDivElement | null>(null);
+  const [voices, setVoices] = useState<string[]>([]);
+  const [voice, setVoice] = useState<string>("");      // "" = agent default
+  const previewRef = useRef<HTMLAudioElement | null>(null);
   useEffect(() => () => stop(), [stop]); // hang up on unmount
+  useEffect(() => {
+    if (voicePicker) api.voiceLab().then((r) => setVoices(r.voices)).catch(() => {});
+  }, [voicePicker]);
   useEffect(() => {
     if (capRef.current) capRef.current.scrollTop = capRef.current.scrollHeight;
   }, [captions]);
+  const previewVoice = (v: string) => {
+    if (!v) return;
+    if (!previewRef.current) previewRef.current = new Audio();
+    previewRef.current.src = api.voiceSampleUrl(v);
+    previewRef.current.play().catch(() => {});
+  };
 
   const low = remaining !== null && remaining <= 20;
   const clock = remaining === null ? null
@@ -49,7 +62,7 @@ export const CallPanel = memo(function CallPanel({ agentId, subtitle, orbSize = 
 
       <div style={{ display: "flex", justifyContent: "center", padding: "14px 0 10px" }}>
         <div style={{ position: "relative", width: orbSize, height: orbSize, cursor: "pointer" }}
-          onClick={() => (status === "idle" ? start(agentId) : stop())}>
+          onClick={() => (status === "idle" ? start(agentId, voice || undefined) : stop())}>
           <Orb size={orbSize} levelRef={levelRef} active={status === "live"} />
           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center",
             justifyContent: "center", pointerEvents: "none" }}>
@@ -58,6 +71,30 @@ export const CallPanel = memo(function CallPanel({ agentId, subtitle, orbSize = 
           </div>
         </div>
       </div>
+
+      {voicePicker && voices.length > 0 && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+          margin: "2px 0 12px" }}>
+          <span style={{ fontSize: 12, color: C.faint }}>Voice</span>
+          <select value={voice} onChange={(e) => setVoice(e.target.value)}
+            disabled={status !== "idle"}
+            style={{ background: C.paper, border: `1px solid ${C.lineSoft}`, borderRadius: 9,
+              padding: "7px 10px", fontSize: 13, color: C.ink, outline: "none",
+              textTransform: "capitalize", cursor: status === "idle" ? "pointer" : "default",
+              opacity: status === "idle" ? 1 : 0.6 }}>
+            <option value="">Neha (default)</option>
+            {voices.filter((v) => v !== "neha").map((v) => (
+              <option key={v} value={v} style={{ textTransform: "capitalize" }}>{v}</option>
+            ))}
+          </select>
+          <span onClick={() => previewVoice(voice || "neha")} title="Preview this voice"
+            style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 28,
+              height: 28, borderRadius: "50%", background: C.ink, cursor: "pointer" }}>
+            <div style={{ width: 0, height: 0, borderLeft: "7px solid #fff",
+              borderTop: "5px solid transparent", borderBottom: "5px solid transparent", marginLeft: 2 }} />
+          </span>
+        </div>
+      )}
 
       {endedReason === "time_limit" && status === "idle" && (
         <div style={{ textAlign: "center", background: "#FBE8E2", border: "1px solid #F1C9BD",

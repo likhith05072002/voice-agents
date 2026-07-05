@@ -85,6 +85,7 @@ export const api = {
       body: JSON.stringify({ to, agent_id }),
     }),
 
-  webCallUrl: (agentId: string) =>
-    `${WS_BASE}/web-call?agent_id=${encodeURIComponent(agentId)}`,
+  webCallUrl: (agentId: string, voice?: string) =>
+    `${WS_BASE}/web-call?agent_id=${encodeURIComponent(agentId)}` +
+    (voice ? `&voice=${encodeURIComponent(voice)}` : ""),
 };
