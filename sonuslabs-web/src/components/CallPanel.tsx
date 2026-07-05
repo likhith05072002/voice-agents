@@ -8,8 +8,9 @@ import { C, mono } from "../theme";
 // Wired to the REAL /web-call WebSocket — no fakes.
 // memo()ed so parent-page state flips (taglines etc.) never re-render the
 // call subtree while audio is running; the orb animates via levelRef, not props.
-export const CallPanel = memo(function CallPanel({ agentId, subtitle, orbSize = 210, voicePicker }:
-  { agentId: string; subtitle?: string; orbSize?: number; voicePicker?: boolean }) {
+export const CallPanel = memo(function CallPanel({ agentId, subtitle, orbSize = 210, voicePicker, forceVoice, forcePace }:
+  { agentId: string; subtitle?: string; orbSize?: number; voicePicker?: boolean;
+    forceVoice?: string; forcePace?: number }) {
   const { status, captions, levelRef, remaining, endedReason, start, stop } = useWebCall();
   const capRef = useRef<HTMLDivElement | null>(null);
   const [voices, setVoices] = useState<string[]>([]);
@@ -62,7 +63,9 @@ export const CallPanel = memo(function CallPanel({ agentId, subtitle, orbSize = 
 
       <div style={{ display: "flex", justifyContent: "center", padding: "14px 0 10px" }}>
         <div style={{ position: "relative", width: orbSize, height: orbSize, cursor: "pointer" }}
-          onClick={() => (status === "idle" ? start(agentId, voice || undefined) : stop())}>
+          onClick={() => (status === "idle"
+            ? start(agentId, forceVoice || voice || undefined, forcePace)
+            : stop())}>
           <Orb size={orbSize} levelRef={levelRef} active={status === "live"} />
           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center",
             justifyContent: "center", pointerEvents: "none" }}>

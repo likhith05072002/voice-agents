@@ -129,9 +129,16 @@ function AgentDetail({ id, onClose }: { id: string; onClose: () => void }) {
 
   return (
     <>
+      {/* Top action bar: breadcrumb + Save/Delete always visible, no scrolling */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 22 }}>
         <span onClick={onClose} style={{ cursor: "pointer", color: "#9A907C", fontSize: 14, fontWeight: 600 }}>← Agents</span>
         <span style={{ color: "#463F32" }}>/</span><span style={{ fontWeight: 700 }}>{a.name}</span>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
+          <button onClick={del} style={{ fontSize: 14, fontWeight: 600, color: C.red, background: "transparent",
+            border: "1px solid #4A2E29", borderRadius: 10, padding: "9px 16px", cursor: "pointer" }}>Delete</button>
+          <button onClick={save} style={{ fontSize: 14, fontWeight: 600, color: C.ink, background: C.accent,
+            border: "none", borderRadius: 10, padding: "9px 18px", cursor: "pointer" }}>{saved ? "Saved ✓" : "Save changes"}</button>
+        </div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 22, alignItems: "start" }}>
         <div style={{ ...cardPad, display: "flex", flexDirection: "column", gap: 16 }}>
@@ -159,24 +166,33 @@ function AgentDetail({ id, onClose }: { id: string; onClose: () => void }) {
             <input type="range" min={0.5} max={2} step={0.1} value={a.voice_pace ?? 1}
               onChange={(e) => upd({ voice_pace: parseFloat(e.target.value) })}
               style={{ width: "100%", accentColor: C.accent }} /></div>
-          <div><div style={dlbl}>KNOWLEDGE · {(a.knowledge_docs || []).length} facts</div>
+          <div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+              <div style={{ ...dlbl, marginBottom: 0 }}>KNOWLEDGE · {(a.knowledge_docs || []).length} facts</div>
+              <button onClick={() => upd({ knowledge_docs: [...(a.knowledge_docs || []), ""] })}
+                style={{ fontSize: 12.5, fontWeight: 600, color: C.ink, background: C.accent, border: "none",
+                  borderRadius: 8, padding: "6px 11px", cursor: "pointer" }}>+ Add fact</button>
+            </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {(a.knowledge_docs || []).map((d, i) => (
-                <textarea key={i} value={d} onChange={(e) => {
-                  const docs = [...a.knowledge_docs]; docs[i] = e.target.value; upd({ knowledge_docs: docs });
-                }} style={{ ...dfield, minHeight: 40, resize: "vertical", fontSize: 13, lineHeight: 1.4 }} />
+                <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                  <textarea value={d} onChange={(e) => {
+                    const docs = [...a.knowledge_docs]; docs[i] = e.target.value; upd({ knowledge_docs: docs });
+                  }} style={{ ...dfield, flex: 1, minHeight: 40, resize: "vertical", fontSize: 13, lineHeight: 1.4 }} />
+                  <span onClick={() => upd({ knowledge_docs: a.knowledge_docs.filter((_, j) => j !== i) })}
+                    title="Remove fact" style={{ cursor: "pointer", color: "#7A7160", fontSize: 18, lineHeight: 1,
+                    padding: "8px 6px" }}>×</span>
+                </div>
               ))}
+              {(a.knowledge_docs || []).length === 0 && (
+                <div style={{ fontSize: 13, color: C.darkMuted }}>No facts yet — add what the agent should know.</div>
+              )}
             </div></div>
-          <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
-            <button onClick={save} style={{ fontSize: 14, fontWeight: 600, color: C.ink, background: C.accent,
-              border: "none", borderRadius: 10, padding: "11px 18px", cursor: "pointer" }}>{saved ? "Saved ✓" : "Save changes"}</button>
-            <button onClick={del} style={{ fontSize: 14, fontWeight: 600, color: C.red, background: "transparent",
-              border: "1px solid #4A2E29", borderRadius: 10, padding: "11px 18px", cursor: "pointer" }}>Delete</button>
-          </div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <div style={{ background: C.paper, borderRadius: 16, padding: 4 }}>
-            <CallPanel agentId={id} subtitle={a.name} orbSize={170} /></div>
+            <CallPanel agentId={id} subtitle="uses your current settings" orbSize={170}
+              forceVoice={a.voice} forcePace={a.voice_pace} /></div>
           <div style={{ ...cardPad }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: C.darkMuted, marginBottom: 10 }}>TEST-CALL MY PHONE</div>
             <div style={{ display: "flex", gap: 8 }}>
