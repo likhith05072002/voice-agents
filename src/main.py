@@ -86,6 +86,16 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Voice Agent", version="0.8.0", lifespan=lifespan)
 
+# The SonusLabs frontend is a separate React app (different origin in dev and
+# prod) — without CORS every fetch dies in preflight.
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],       # tighten to the sonuslabs.ai origins at deploy
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 _sessions = SessionLimiter(settings.max_concurrent_sessions)
 _call_registry = CallRegistry()
