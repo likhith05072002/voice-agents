@@ -179,10 +179,13 @@ async def test_false_interruption_recovers_after_timeout():
     await stt.q.put(TranscriptEvent(text="hi", is_final=True, language="en", timestamp=0.0))
     assert await _wait_until(lambda: engine.state == State.SPEAKING)
 
-    # VAD fires (noise) but no transcript ever arrives.
+    # VAD fires (noise blip) but no transcript ever arrives; the blip ENDS
+    # (real noise always does — a start with no end is the VAD-stuck case,
+    # covered by the 30s hard cap, not this test).
     await stt.q.put(VADEvent(is_speech_start=True, timestamp=0.0))
     assert await _wait_until(lambda: engine._candidate is True)
-    # exceeds false_timeout_s -> recovery resumes playback
+    await stt.q.put(VADEvent(is_speech_start=False, timestamp=0.0))
+    # caller quiet + no transcript -> recovery resumes playback
     assert await _wait_until(lambda: engine._candidate is False)
     assert engine.state == State.SPEAKING
 
@@ -534,3 +537,31 @@ async def test_pump_never_fills_silence_mid_sentence():
     assert all(f != e._silence_frame for f in between), "silence injected mid-sentence"
     # after the mark, keep-warm fill resumes
     assert any(f == e._silence_frame for f in sent[idx[1]:])
+
+
+async def test_no_resume_while_caller_still_speaking():
+    """A long interruption must keep the agent silent for as long as the
+    caller keeps talking — the old 4-cycle bound resumed over them at ~5s."""
+    import asyncio
+    from src.pipeline.turn_engine import TurnEngine
+
+    e = TurnEngine.__new__(TurnEngine)
+    e.false_timeout_s = 0.01
+    e._candidate = True
+    e._caller_speaking = True
+    e.enable_recovery = True
+    resumed = []
+    e._notify_false_recovery = lambda: None
+    e._resume_playback = lambda: resumed.append(1)
+
+    task = asyncio.create_task(e._candidate_timeout())
+    await asyncio.sleep(0.2)          # ~20 old cycles worth of talking
+    assert not resumed, "resumed while the caller was still speaking"
+    e._caller_speaking = False        # caller finally finishes
+    await asyncio.sleep(0.05)
+    assert resumed, "did not recover after the caller went quiet"
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass

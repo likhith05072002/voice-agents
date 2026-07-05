@@ -480,20 +480,27 @@ class TurnEngine:
     async def _candidate_timeout(self) -> None:
         """False-interruption recovery: VAD fired but no real words arrived.
 
-        NEVER resumes while the caller is still audibly speaking — a long
-        interruption ("Sorry to cut you off, what time does…") outlives the
-        timeout, and resuming mid-sentence makes the agent talk over the caller
-        (heard as a stutter on real test calls). While speech continues we
-        re-arm; a transcript or END_SPEECH+grace decides the outcome."""
-        for cycle in range(4):                # bounded: a lost END can't pause forever
+        NEVER resumes while the caller is still audibly speaking — no matter
+        how long they talk. The old bounded re-arm (4 cycles ≈ 5s) gave up on
+        long interruptions and the agent leaked speech OVER the caller until
+        they stopped (heard live on lengthy questions). Now the timeout clock
+        only runs while the caller is QUIET; a 30s hard cap guards the one
+        pathological case (VAD stuck 'loud' on constant background noise)."""
+        started = time.perf_counter()
+        while True:
             try:
                 await asyncio.sleep(self.false_timeout_s)
             except asyncio.CancelledError:
                 return
             if not self._candidate:
                 return
-            if self._caller_speaking and cycle < 3:
-                continue                      # still talking — keep waiting
+            if self._caller_speaking:
+                if time.perf_counter() - started > 30.0:
+                    logger.warning("barge_in.recovered", reason="vad_stuck_30s")
+                    self._notify_false_recovery()
+                    self._resume_playback()
+                    return
+                continue                      # still talking — never talk over them
             logger.info("barge_in.recovered", reason="no_transcript")
             self._notify_false_recovery()
             self._resume_playback()
