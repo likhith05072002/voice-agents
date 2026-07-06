@@ -6,3 +6,6 @@ structlog==24.4.0
 pydantic==2.9.0
 numpy==1.26.4
 uvloop==0.21.0; sys_platform != "win32"
+# Python 3.13 removed the stdlib `audioop` (PEP 594); this backport restores it.
+# The whole telephony path (mulaw encode/decode, ratecv, rms) imports audioop.
+audioop-lts==0.2.1; python_version >= "3.13"
