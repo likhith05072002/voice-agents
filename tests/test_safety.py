@@ -4,6 +4,9 @@ from src.safety.guard import is_injection, leaks_system_prompt, guard_sentence, 
 
 SYS = ("You are Lakshmi, AI assistant at Nama Srinivasa Jewellery, Banjara Hills, "
        "Hyderabad. CRITICAL: Reply in the SAME language the customer uses.")
+# A real prompt-dump reproduces a LONG contiguous span (the leak guard requires
+# >=120 normalized chars now, so a short shared phrase is not a "leak").
+FULL_LEAK = SYS
 
 
 # ─── injection detection ───
@@ -24,12 +27,17 @@ def test_legit_jewellery_talk_is_not_injection():
 # ─── system-prompt leak detection ───
 
 def test_detects_verbatim_prompt_leak():
-    leaked = "Sure. You are Lakshmi, AI assistant at Nama Srinivasa Jewellery, Banjara Hills, Hyderabad."
-    assert leaks_system_prompt(leaked, SYS)
+    assert leaks_system_prompt("Sure. " + FULL_LEAK, SYS)
 
 
 def test_normal_answer_does_not_trip_leak():
     assert not leaks_system_prompt("22 carat gold is 7150 rupees per gram today.", SYS)
+
+
+def test_short_selfdescription_overlap_is_not_a_leak():
+    # A legitimate self-description that shares a phrase (< 120 chars) must NOT be
+    # flagged — this is what falsely refused "what does your company do".
+    assert not leaks_system_prompt("You are Lakshmi, our assistant here.", SYS)
 
 
 def test_leak_check_handles_short_prompt():
@@ -39,10 +47,10 @@ def test_leak_check_handles_short_prompt():
 # ─── guard_sentence ───
 
 def test_guard_blocks_leak_with_refusal():
-    leaked = "You are Lakshmi, AI assistant at Nama Srinivasa Jewellery, Banjara Hills, Hyderabad."
-    text, blocked = guard_sentence(leaked, SYS)
+    text, blocked = guard_sentence(FULL_LEAK, SYS)
     assert blocked is True
     assert text == DEFAULT_REFUSAL
+    assert "jewellery" not in text.lower()   # refusal is brand-neutral now
 
 
 def test_guard_passes_normal_sentence():
@@ -66,11 +74,9 @@ class _STT:
 
 
 class _LeakLLM:
-    """Streams a sentence that parrots the system prompt verbatim."""
+    """Streams a sentence that dumps the system prompt verbatim (>=120 chars)."""
     async def generate_sentences(self, messages, queue):
-        await queue.put(SentenceEvent(
-            text="You are Lakshmi, AI assistant at Nama Srinivasa Jewellery, Banjara Hills, Hyderabad.",
-            is_first=True, timestamp=0.0))
+        await queue.put(SentenceEvent(text=FULL_LEAK, is_first=True, timestamp=0.0))
         await queue.put(SentenceEvent(text="And more secrets. ", is_first=False, timestamp=0.0))
         await queue.put(None)
         return "leak"
@@ -101,6 +107,27 @@ async def test_engine_blocks_prompt_leak_with_refusal():
     answer = next(h for h in engine.history if h["role"] == "assistant")["content"]
     assert answer == DEFAULT_REFUSAL          # refusal, not the leaked prompt
     assert "Lakshmi" not in answer
+
+
+async def test_engine_allows_selfdescription_on_normal_turn():
+    """The KEY fix: a leak-shaped answer on a NORMAL (non-injection) turn is NOT
+    refused — an agent describing its own company/services quotes its prompt
+    legitimately (heard live: 'what does your company do' -> jewellery refusal)."""
+    sent = []
+    engine = TurnEngine(stt=_STT(), llm=_LeakLLM(), tts=_TTS(),
+                        send_media=lambda f: sent.append(f) or _noop(),
+                        system_prompt=SYS, greeting_text="", frame_pace_s=0,
+                        enable_safety=True)
+    run = asyncio.create_task(engine.run())
+    await engine.stt.q.put(TranscriptEvent(text="what do you do",   # NOT an injection
+                                           is_final=True, language="en", timestamp=0.0))
+    await _wait(lambda: any(h["role"] == "assistant" for h in engine.history))
+    await engine.stt.q.put(None)
+    await asyncio.wait_for(run, timeout=4.0)
+
+    answer = next(h for h in engine.history if h["role"] == "assistant")["content"]
+    assert answer != DEFAULT_REFUSAL          # self-description passed through
+    assert "Lakshmi" in answer
 
 
 async def _noop():

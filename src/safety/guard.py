@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import re
 
-DEFAULT_REFUSAL = "I'm sorry, I can't help with that. Is there anything about our jewellery I can help with?"
+# Brand-neutral: used by EVERY agent (was a hardcoded jewellery line that leaked
+# into the general assistant — "anything about our jewellery?" on a SonusLabs call).
+DEFAULT_REFUSAL = "Sorry, I can't help with that one. Is there anything else I can do for you?"
 
 # Prompt-injection / jailbreak cues (English + a few romanized Indic). Case-
 # insensitive, matched as phrases. Used for flagging — kept reasonably tight.
@@ -47,11 +49,15 @@ def _normalize(s: str) -> str:
     return " ".join(s.lower().split())
 
 
-def leaks_system_prompt(text: str, system_prompt: str, *, min_overlap: int = 40) -> bool:
+def leaks_system_prompt(text: str, system_prompt: str, *, min_overlap: int = 120) -> bool:
     """True if ``text`` contains a long verbatim span of the system prompt.
 
     A contiguous overlap of ``min_overlap`` normalized chars is a strong signal
-    the model is parroting its instructions rather than answering."""
+    the model is dumping its instructions rather than answering. Threshold is
+    deliberately HIGH: at 40 chars a legitimate self-description ("SonusLabs
+    builds human-sounding AI voice agents…" — which is IN the prompt) tripped it
+    and got refused. A real prompt-dump reproduces long contiguous spans; a
+    natural answer that shares a phrase does not."""
     nt, ns = _normalize(text), _normalize(system_prompt)
     if len(ns) < min_overlap:
         return False

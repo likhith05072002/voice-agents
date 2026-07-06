@@ -841,9 +841,13 @@ class TurnEngine:
         (text_to_speak, blocked)."""
         if not self.enable_safety:
             return text, False
-        guarded, blocked = guard_sentence(text, active_prompt)
-        if blocked:
-            return guarded, True
+        # Leak guard fires ONLY on turns where the caller attempted prompt
+        # extraction — never on a normal turn (an agent describing its own
+        # company/services quotes its prompt legitimately).
+        if getattr(self, "_injection_turn", False):
+            guarded, blocked = guard_sentence(text, active_prompt)
+            if blocked:
+                return guarded, True
         cats = moderate(text)
         if is_blocked(cats):
             return DEFAULT_REFUSAL, True
@@ -1078,7 +1082,11 @@ class TurnEngine:
         self._last_speech_end = None
         self._turn_metrics = tl
         logger.info("turn.start", user_text=transcript[:80].encode("ascii", "replace").decode())
-        if self.enable_safety and is_injection(transcript):
+        # The prompt-leak guard only ARMS when the caller actually tried to
+        # extract the prompt this turn. Otherwise a legitimate self-description
+        # ("what does your company do") gets refused as a "leak" (heard live).
+        self._injection_turn = self.enable_safety and is_injection(transcript)
+        if self._injection_turn:
             logger.warning("safety.injection_flagged",
                            text=transcript[:60].encode("ascii", "replace").decode())
         self.history.append({"role": "user", "content": transcript})
