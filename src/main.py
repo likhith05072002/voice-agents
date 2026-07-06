@@ -1222,3 +1222,23 @@ async def media_stream(websocket: WebSocket):
             await llm.close()
         _sessions.release()
         logger.info("call.cleanup")
+
+
+# ─── Serve the SonusLabs frontend (single origin: one tunnel serves site + API) ───
+# Registered LAST so every API/WS route above takes precedence; the catch-all
+# only handles SPA paths (/, /create, /console) and static assets.
+from pathlib import Path as _Path                                   # noqa: E402
+from fastapi.staticfiles import StaticFiles                          # noqa: E402
+from fastapi.responses import FileResponse as _FileResponse          # noqa: E402
+
+_DIST = _Path(__file__).resolve().parent.parent / "sonuslabs-web" / "dist"
+if _DIST.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(_DIST / "assets")), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def _spa(full_path: str):
+        candidate = _DIST / full_path
+        if full_path and candidate.is_file():          # real file (favicon, etc.)
+            return _FileResponse(str(candidate))
+        return _FileResponse(str(_DIST / "index.html"))  # SPA shell for client routes
+    logger.info("frontend.mounted", dist=str(_DIST))

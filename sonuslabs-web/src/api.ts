@@ -1,6 +1,10 @@
 // Single source of truth for every backend call. No mock data anywhere.
+// If VITE_API_BASE is set (dev: http://localhost:8001), use it. Otherwise fall
+// back to the page's own origin — so a production build served BY the backend
+// (same origin, one tunnel) just works, phone included.
+const RAW = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
 export const API_BASE =
-  (import.meta.env.VITE_API_BASE as string) || "http://localhost:8001";
+  RAW || (typeof window !== "undefined" ? window.location.origin : "http://localhost:8001");
 
 const WS_BASE = API_BASE.replace(/^http/, "ws");
 
