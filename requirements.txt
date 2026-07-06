@@ -4,6 +4,8 @@ websockets==14.2
 httpx==0.28.0
 structlog==24.4.0
 pydantic==2.9.0
+# BaseSettings moved out of pydantic core in v2 — config.py imports it from here.
+pydantic-settings==2.6.1
 numpy==1.26.4
 uvloop==0.21.0; sys_platform != "win32"
 # Python 3.13 removed the stdlib `audioop` (PEP 594); this backport restores it.

@@ -13,8 +13,9 @@ EnvironmentFile=/home/likhith/sonuslabs/.env.production
 # is intentionally NOT used: HTTP parsing isn't our bottleneck (audio is over
 # WebSockets), and it avoids an ARM build dependency. Access log off: the media
 # WS would log every frame's HTTP noise.
+# Port 8011 (8001 is taken by a Docker container / docker-proxy on this Pi).
 ExecStart=/home/likhith/sonuslabs/.venv/bin/python -m uvicorn src.main:app \
-    --host 127.0.0.1 --port 8001 --workers 1 \
+    --host 127.0.0.1 --port 8011 --workers 1 \
     --loop uvloop --no-access-log --log-level warning
 Restart=always
 RestartSec=3
