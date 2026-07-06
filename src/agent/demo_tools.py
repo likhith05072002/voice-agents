@@ -338,8 +338,8 @@ _ABOUT_SELF_RE = _re.compile(
     r"sonus\s*labs|sonuslabs|\byour (company|service|product|pricing|price|plan|"
     r"team|founder|feature|name)|what (can|do|are) you (do|offer|called)|"
     r"can you (laugh|sing|hear|speak|talk|help|do)|are you (a |an )?(bot|robot|human|real|ai)|"
-    r"who made you|who built you|about you\b|this (assistant|receptionist|bot)|"
-    r"bullshit|nonsense|stupid|useless", _re.IGNORECASE)
+    r"who made you|who built you|about (you|yourself)\b|\byourself\b|"
+    r"this (assistant|receptionist|bot)|bullshit|nonsense|stupid|useless", _re.IGNORECASE)
 # CURRENT / REAL-TIME markers: dated facts, live figures, public officials, or an
 # explicit request to look something up. Kept tight on purpose — a false NEGATIVE
 # just means the LLM answers from its own (usually fine) knowledge.
@@ -354,18 +354,36 @@ _CURRENT_RE = _re.compile(
     r"prime minister|president|chief minister|\bpm\b|\bceo\b|mayor|governor|"
     r"20(2[4-9]|3\d))\b", _re.IGNORECASE)
 _EXPLICIT_SEARCH_RE = _re.compile(
-    r"\b(search|look (it|that|this) up|look up|google|find out|check online)\b",
+    r"\b(search|look (it|that|this|them|him|her)?\s*up|look up|look into|google|"
+    r"find out|find (me )?(info|information|details)|check online|"
+    r"research|dig (up|into)|read (up )?(on|about))\b", _re.IGNORECASE)
+# LOOKUP intent: research a specific company / website / person / place — a
+# general-knowledge topic the LLM can't answer reliably (esp. small companies).
+# Heard live: "do some research about cocolevio.com" never searched -> the model
+# improvised "I can't research that". These must fire a live web lookup.
+_LOOKUP_RE = _re.compile(
+    r"\b(tell me (more |something )?about|(more |any |some )?(info|information|details) "
+    r"(on|about)|about (the |this )?(company|business|firm|startup|brand|website|"
+    r"place|person)|what (does|do|is) .+\b(do|does|make|sell|company|business)|"
+    r"who (are|is|owns|runs)\b|about them\b)", _re.IGNORECASE)
+# A bare domain (cocolevio.com, foo.in, bar.ai) is an unambiguous "look this up".
+_DOMAIN_RE = _re.compile(
+    r"\b[a-z0-9][a-z0-9-]{1,}\.(com|in|ai|co|org|net|io|dev|xyz|app|me|biz|info)\b",
     _re.IGNORECASE)
 
 
 def _wants_web(text: str) -> bool:
-    """True only when a caller turn needs CURRENT or REAL-TIME information."""
+    """True when a caller turn needs a live web lookup — current/real-time facts,
+    an explicit search/research request, a company/person/website lookup, or a
+    bare domain name."""
     t = (text or "").strip()
-    if len(t.split()) < 2:
+    has_domain = bool(_DOMAIN_RE.search(t))
+    if len(t.split()) < 2 and not has_domain:   # a lone domain is enough
         return False
     if _CHITCHAT_RE.search(t) or _ABOUT_SELF_RE.search(t):
         return False
-    return bool(_CURRENT_RE.search(t) or _EXPLICIT_SEARCH_RE.search(t))
+    return bool(has_domain or _CURRENT_RE.search(t) or _EXPLICIT_SEARCH_RE.search(t)
+                or _LOOKUP_RE.search(t))
 
 
 def build_assistant_registry() -> ToolRegistry:

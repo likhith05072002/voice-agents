@@ -16,6 +16,22 @@ def test_wants_web_fires_on_current_realtime():
         assert _wants_web(q), q
 
 
+def test_wants_web_fires_on_company_research_and_domains():
+    # Heard live: none of these searched -> the assistant improvised "I can't research that".
+    for q in [
+        "do some research about a company named Koko Livo LLC",
+        "tell me something about that company",
+        "the company name is cocolevio.com",
+        "do some indirect research about that",
+        "cocolevio.com",                       # a bare domain is enough
+        "tell me about cocolevio",
+        "look up cocolevio for me",
+        "who owns tesla",
+        "find me info about zomato",
+    ]:
+        assert _wants_web(q), q
+
+
 def test_wants_web_skips_chitchat_self_and_general_knowledge():
     for q in [
         # chitchat / emotional / casual
@@ -24,7 +40,7 @@ def test_wants_web_skips_chitchat_self_and_general_knowledge():
         "what is this bullshit", "can you laugh", "are you a robot",
         # about the assistant
         "tell me about SonusLabs", "what can you do", "what is your pricing",
-        "who built you", "tell me about this receptionist",
+        "who built you", "tell me about this receptionist", "tell me about yourself",
         # general knowledge the LLM should answer itself (no live data needed)
         "what is the capital of France", "explain how a jet engine works",
         "how tall is Mount Everest",
