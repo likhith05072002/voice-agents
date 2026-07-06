@@ -20,3 +20,4 @@ data/test_runs/
 data/tts_cache/
 scripts/*.wav
 .gstack/
+data/kb_cache/
