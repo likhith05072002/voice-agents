@@ -21,3 +21,4 @@ data/tts_cache/
 scripts/*.wav
 .gstack/
 data/kb_cache/
+data/nonverbal_lab/

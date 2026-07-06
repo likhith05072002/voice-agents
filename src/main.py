@@ -696,6 +696,48 @@ async def voice_lab():
     return {"voices": VOICE_LAB_CANDIDATES}
 
 
+# ─── Non-verbal / emotion Phase-0 lab (listen + A/B; see scripts/nonverbal_lab.py) ───
+from pathlib import Path as _NVPath  # noqa: E402
+_NVLAB_DIR = _NVPath("data") / "nonverbal_lab"
+
+
+@app.get("/lab/audio/{name}")
+async def lab_audio(name: str):
+    from fastapi.responses import FileResponse, Response
+    if not name.replace("_", "").replace("-", "").isalnum():
+        return Response(status_code=400)
+    f = _NVLAB_DIR / f"{name}.wav"
+    if not f.is_file():
+        return Response(status_code=404)
+    return FileResponse(str(f), media_type="audio/wav")
+
+
+@app.get("/lab/nonverbal")
+async def lab_nonverbal():
+    from fastapi.responses import HTMLResponse
+    import json as _json
+    man = _NVLAB_DIR / "manifest.json"
+    if not man.is_file():
+        return HTMLResponse("<p style='font-family:system-ui;padding:24px'>No clips yet. Run: <code>python -m scripts.nonverbal_lab</code></p>")
+    items = _json.loads(man.read_text(encoding="utf-8"))
+    groups: dict[str, list] = {}
+    for it in items:
+        groups.setdefault(it["group"], []).append(it)
+    rows = ""
+    for g, its in groups.items():
+        rows += f'<h2 style="font-family:Georgia,serif;margin:26px 0 10px;color:#E08A1E">{g}</h2>'
+        for it in its:
+            rows += ('<div style="display:flex;align-items:center;gap:14px;padding:8px 0;border-bottom:1px solid #2a251c;flex-wrap:wrap">'
+                     f'<audio controls preload="none" src="/lab/audio/{it["name"]}" style="height:34px"></audio>'
+                     f'<span style="color:#d8cfbe">{it["label"]}</span></div>')
+    html = ('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<body style="background:#17140f;color:#ede7db;font-family:system-ui;max-width:760px;margin:0 auto;padding:24px">'
+            '<h1 style="font-family:Georgia,serif">Non-verbal voice lab · neha</h1>'
+            '<p style="color:#8a806c">Phase 0: does neha make usable non-verbals from text, and do spliced clips sound seamless? '
+            'Focus on <b>Group 5</b> — text-only vs spliced, same line.</p>' + rows + '</body>')
+    return HTMLResponse(html)
+
+
 # Per-language self-intro (the landing "Eleven languages" chips) — the assistant
 # introduces itself IN that language, in the default voice. All 11 verified to
 # render on bulbul:v3. Brand ("SonusLabs") stays Latin; the model reads mixed.
