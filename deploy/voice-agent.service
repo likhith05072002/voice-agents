@@ -9,11 +9,13 @@ User=likhith
 WorkingDirectory=/home/likhith/sonuslabs
 EnvironmentFile=/home/likhith/sonuslabs/.env.production
 # --workers 1 is REQUIRED: call registry / session limiter are in-process.
-# uvloop + httptools: fastest asyncio stack on Linux. Access log off: the
-# media WS would log every frame's HTTP noise.
+# uvloop is the latency-critical bit (event loop for the 20ms pump). httptools
+# is intentionally NOT used: HTTP parsing isn't our bottleneck (audio is over
+# WebSockets), and it avoids an ARM build dependency. Access log off: the media
+# WS would log every frame's HTTP noise.
 ExecStart=/home/likhith/sonuslabs/.venv/bin/python -m uvicorn src.main:app \
     --host 127.0.0.1 --port 8001 --workers 1 \
-    --loop uvloop --http httptools --no-access-log --log-level warning
+    --loop uvloop --no-access-log --log-level warning
 Restart=always
 RestartSec=3
 TimeoutStopSec=10
