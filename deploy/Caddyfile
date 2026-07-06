@@ -1,0 +1,19 @@
+# SonusLabs — Caddy site block.
+# Behind a Cloudflare NAMED tunnel: Cloudflare terminates public TLS at the edge
+# and the tunnel to the Pi is already encrypted, so Caddy serves PLAIN HTTP on
+# :80 (the explicit http:// scheme disables Caddy's own ACME/HTTPS). cloudflared
+# forwards Host: sonuslabs.online -> here -> the app on 127.0.0.1:8001.
+#
+# This block is ADDITIVE: append it to an existing /etc/caddy/Caddyfile (each
+# site block is independent) — it won't touch your other apps' blocks.
+http://sonuslabs.online, http://www.sonuslabs.online {
+	# reverse_proxy transparently upgrades WebSockets (the /web-call and
+	# /media-stream audio streams) — no extra config needed, and it streams
+	# rather than buffers, which matters for the 20ms paced audio frames.
+	reverse_proxy 127.0.0.1:8001
+
+	# Trust the tunnel's forwarded client IP (Cloudflare) for logs.
+	log {
+		output file /var/log/caddy/sonuslabs.log
+	}
+}

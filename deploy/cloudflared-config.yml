@@ -1,22 +1,33 @@
-# Cloudflare NAMED tunnel config — /etc/cloudflared/config.yml on the Pi.
-# Created once with:
-#   cloudflared tunnel login
-#   cloudflared tunnel create voice-agent
-#   cloudflared tunnel route dns voice-agent voice.YOURDOMAIN.com
-# Then installed as a service:  sudo cloudflared service install
-tunnel: voice-agent
-credentials-file: /home/pi/.cloudflared/voice-agent.json
+# Cloudflare NAMED tunnel config — goes to /etc/cloudflared/config.yml on the Pi.
+#
+# Created ONCE with (see deploy/DEPLOY.md for the full flow):
+#   cloudflared tunnel login                       # authorise (opens a browser)
+#   cloudflared tunnel create sonuslabs            # prints a TUNNEL-ID + creds json
+#   cloudflared tunnel route dns sonuslabs sonuslabs.online
+#   cloudflared tunnel route dns sonuslabs www.sonuslabs.online
+#
+# Replace <TUNNEL-ID> below with the id printed by `tunnel create`
+# (the creds file is /home/likhith/.cloudflared/<TUNNEL-ID>.json).
+tunnel: sonuslabs
+credentials-file: /home/likhith/.cloudflared/<TUNNEL-ID>.json
+
 # quic beats http2 for tunneled websocket audio (UDP transport, less
 # head-of-line blocking); 4 HA connections ride out edge failovers.
 protocol: quic
 ha-connections: 4
 
 ingress:
-  - hostname: voice.YOURDOMAIN.com
-    service: http://127.0.0.1:8001
+  # Public traffic -> Caddy on :80 -> the app on :8001.
+  # (To skip Caddy, point service straight at http://127.0.0.1:8001.)
+  - hostname: sonuslabs.online
+    service: http://127.0.0.1:80
     originRequest:
-      # WebSocket media streams are long-lived; never time them out mid-call.
-      noTLSVerify: true
+      # Media streams are long-lived; never time them out mid-call.
+      keepAliveTimeout: 90s
+      tcpKeepAlive: 30s
+  - hostname: www.sonuslabs.online
+    service: http://127.0.0.1:80
+    originRequest:
       keepAliveTimeout: 90s
       tcpKeepAlive: 30s
   - service: http_status:404

@@ -1,17 +1,17 @@
 [Unit]
-Description=Cocolevio Voice Agent
+Description=SonusLabs Voice Agent
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=/home/pi/voice-agent
-EnvironmentFile=/home/pi/voice-agent/.env.production
+User=likhith
+WorkingDirectory=/home/likhith/sonuslabs
+EnvironmentFile=/home/likhith/sonuslabs/.env.production
 # --workers 1 is REQUIRED: call registry / session limiter are in-process.
 # uvloop + httptools: fastest asyncio stack on Linux. Access log off: the
 # media WS would log every frame's HTTP noise.
-ExecStart=/home/pi/voice-agent/.venv/bin/python -m uvicorn src.main:app \
+ExecStart=/home/likhith/sonuslabs/.venv/bin/python -m uvicorn src.main:app \
     --host 127.0.0.1 --port 8001 --workers 1 \
     --loop uvloop --http httptools --no-access-log --log-level warning
 Restart=always
@@ -19,7 +19,7 @@ RestartSec=3
 TimeoutStopSec=10
 LimitNOFILE=65536
 # Frame pacing is latency-critical: give the pump scheduler priority and keep
-# it off core 0 (IRQs) and core 1 (reserve for cloudflared).
+# it on the last two Pi-5 cores (leave 0/1 for OS IRQs + cloudflared + caddy).
 Nice=-10
 CPUAffinity=2 3
 # Don't let a leak take the Pi down.
