@@ -651,3 +651,26 @@ async def test_assistant_filler_speaks_and_live_data_injected(monkeypatch):
     # the live web answer reached the model
     assert "Paris is the capital of France" in captured["sys"]
     assert "LIVE DATA" in captured["sys"]
+
+
+async def test_human_expression_injected_when_enabled():
+    """The human-expression layer (hums/backchannels/pauses, no laughter) is
+    added to the system prompt when enabled, and omitted when off."""
+    captured = {}
+
+    class RecLLM(FakeLLM):
+        async def generate_sentences(self, messages, queue):
+            captured["sys"] = messages[0]["content"]
+            return await super().generate_sentences(messages, queue)
+
+    for enabled in (True, False):
+        captured.clear()
+        stt, llm, tts = FakeSTT(), RecLLM(["Okay. "]), FakeTTS([160])
+        engine = _engine(stt, llm, tts, [], frame_pace_s=0,
+                         enable_human_expression=enabled)
+        run = asyncio.create_task(engine.run())
+        await stt.q.put(TranscriptEvent(text="hi", is_final=True, language="en", timestamp=0.0))
+        await stt.q.put(None)
+        await asyncio.wait_for(run, timeout=4.0)
+        has = "SOUND HUMAN" in captured["sys"] and "NEVER laugh" in captured["sys"]
+        assert has is enabled, f"expression injected={has} but enabled={enabled}"

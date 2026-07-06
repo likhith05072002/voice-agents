@@ -34,6 +34,7 @@ class AgentConfig:
     voice: str = "anushka"
     voice_pace: float = 1.0            # 0.5-2.0; ~0.95 = calmer, more human
     enable_language_switch: bool = True
+    enable_human_expression: bool = True   # natural hums/backchannels/pauses in text
 
     # Persona
     system_prompt: str = ""

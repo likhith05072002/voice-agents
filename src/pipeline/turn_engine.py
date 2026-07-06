@@ -131,6 +131,33 @@ def _is_greeting_only(text: str) -> bool:
     return 0 < len(words) <= 2 and all(w.lower() in _GREETING_WORDS for w in words)
 
 
+# Human-expression layer (the emotion/non-verbal differentiator). Phase-0 by-ear
+# result: neha renders hums, acknowledgment backchannels, ellipsis pauses and
+# empathy words NATURALLY from plain text (all languages) — so this is a TEXT
+# layer, no audio splicing. Laughter is EXCLUDED: neha reads "haha" as letters,
+# and laughter is the highest social-risk non-verbal (misplaced = creepy). The
+# CAPS frequency governor + one-feeling rule + hard state bans mirror the
+# researched best practice (LLMs overuse tags without an explicit cap).
+HUMAN_EXPRESSION_PROMPT = (
+    "SOUND HUMAN, NOT ROBOTIC. Where a warm person naturally would, weave short "
+    "spoken touches directly into your reply — written IN THE CALLER'S OWN "
+    "LANGUAGE so they are said aloud:\n"
+    "- Acknowledge/agree: English \"mm-hmm\", \"right\", \"I see\"; Hindi \"हाँ\", "
+    "\"अच्छा\", \"जी\", \"ठीक है\"; the natural backchannel in whatever language "
+    "the caller uses.\n"
+    "- Think / check something: a brief \"hmm\" or \"let me see\", and use \"…\" "
+    "for a natural pause while you look it up.\n"
+    "- Empathy on a complaint or bad news: a soft \"oh\" and a genuine \"I'm sorry "
+    "to hear that\" (in the caller's language).\n"
+    "RULES: use these SPARINGLY — AT MOST ONE per reply, and MOST replies should "
+    "have NONE. One feeling per turn; do not bounce between emotions. Keep them "
+    "short and natural, never forced. NEVER laugh or write \"haha\"/\"hehe\"/"
+    "\"lol\" — it sounds fake. NEVER add an acknowledgment or filler when quoting "
+    "a price, confirming a booking, or giving critical info — be crisp and clear "
+    "there. Never sound cheerful while delivering bad news."
+)
+
+
 # One 20ms frame of mu-law digital silence. Sent whenever we have nothing to
 # say: a stream that stops between utterances makes the carrier's comfort-noise
 # generator toggle at every sentence edge, which callers hear as soft thumps
@@ -184,6 +211,7 @@ class TurnEngine:
         idle_hangup_s: float = 30.0,
         reprompt_text: str = "",
         enable_language_switch: bool = False,
+        enable_human_expression: bool = True,
         knowledge=None,
         router=None,
         on_transcript=None,
@@ -241,6 +269,7 @@ class TurnEngine:
         self.idle_hangup_s = idle_hangup_s
         self.reprompt_text = reprompt_text
         self.enable_language_switch = enable_language_switch
+        self.enable_human_expression = enable_human_expression
         self._caller_language = ""
         self._lang_candidate = ""       # sticky-switch staging (see _track_language)
         self.knowledge = knowledge               # KnowledgeBase | None (RAG)
@@ -1071,6 +1100,8 @@ class TurnEngine:
         now_ist = time.strftime("%A, %d %B %Y, %I:%M %p",
                                 time.gmtime(time.time() + 19800))
         sys_content = f"Current date and time (IST): {now_ist}.\n\n{active_prompt}"
+        if self.enable_human_expression:
+            sys_content += f"\n\n{HUMAN_EXPRESSION_PROMPT}"
         if self.knowledge is not None:
             snippets = self.knowledge.retrieve(transcript)
             # ALWAYS ground the model in the first doc (company identity) PLUS

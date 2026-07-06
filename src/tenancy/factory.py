@@ -99,6 +99,7 @@ def build_engine(
         idle_hangup_s=idle_hangup_s,
         reprompt_text=agent.idle_reprompt_text,
         enable_language_switch=agent.enable_language_switch,
+        enable_human_expression=agent.enable_human_expression,
         knowledge=_knowledge_for(agent),
         on_transcript=on_transcript,
         on_metrics=on_metrics,
