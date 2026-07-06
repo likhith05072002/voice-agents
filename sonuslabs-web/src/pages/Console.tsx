@@ -3,13 +3,68 @@ import { useNavigate } from "react-router-dom";
 import { CallPanel } from "../components/CallPanel";
 import { api, AgentConfig, AgentLite, CallRecord, LiveLine } from "../api";
 import { C, serif, mono, serif as SF, langLabel, LANGS } from "../theme";
+import { useIsMobile } from "../useIsMobile";
 
 type Tab = "agents" | "calls" | "live" | "voice" | "analytics";
+const TABS: [Tab, string][] = [["agents", "Agents"], ["calls", "Calls"], ["live", "Live"],
+  ["voice", "Voice Lab"], ["analytics", "Analytics"]];
 
 export function Console() {
   const nav = useNavigate();
+  const mob = useIsMobile();
   const [tab, setTab] = useState<Tab>("agents");
   const [liveCount, setLiveCount] = useState(0);
+
+  const tabRow = TABS.map(([k, label]) => {
+    const on = tab === k;
+    return (
+      <div key={k} onClick={() => setTab(k)} style={{ display: "flex", alignItems: "center", gap: 11,
+        padding: mob ? "9px 13px" : "10px 12px", borderRadius: 10, cursor: "pointer",
+        fontSize: 14.5, fontWeight: 600, whiteSpace: "nowrap",
+        background: on ? C.darkCard : "transparent", color: on ? C.darkText : C.darkMuted }}>
+        <span style={{ width: 7, height: 7, borderRadius: 2, background: on ? C.accent : "#463F32" }} />
+        {label}
+        {k === "live" && liveCount > 0 && (
+          <span style={{ marginLeft: mob ? 4 : "auto", display: "flex", alignItems: "center", gap: 5,
+            fontSize: 10.5, fontWeight: 700, color: C.red }}>
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.red, animation: "sl-livedot 1.4s infinite" }} />
+            {liveCount}</span>
+        )}
+      </div>
+    );
+  });
+
+  const body = (
+    <>
+      {tab === "agents" && <AgentsTab />}
+      {tab === "calls" && <CallsTab />}
+      {tab === "live" && <LiveTab onCount={setLiveCount} />}
+      {tab === "voice" && <VoiceTab />}
+      {tab === "analytics" && <AnalyticsTab />}
+    </>
+  );
+
+  if (mob) {
+    // Mobile: sticky top bar (logo + New) + horizontal scrollable tabs, content below.
+    return (
+      <div style={{ minHeight: "100vh", background: C.dark, color: C.darkText }}>
+        <div style={{ position: "sticky", top: 0, zIndex: 20, background: C.dark,
+          borderBottom: `1px solid ${C.darkLine}` }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px" }}>
+            <div onClick={() => nav("/")} style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer" }}>
+              <div style={{ width: 24, height: 24, borderRadius: 7, background: C.accent }} />
+              <span style={{ fontFamily: serif, fontSize: 18 }}>SonusLabs</span>
+            </div>
+            <div onClick={() => nav("/create")} style={{ fontSize: 13, fontWeight: 600, background: C.accent,
+              color: C.ink, borderRadius: 9, padding: "8px 13px", cursor: "pointer" }}>+ New</div>
+          </div>
+          <div style={{ display: "flex", gap: 4, overflowX: "auto", padding: "0 12px 10px",
+            WebkitOverflowScrolling: "touch" }}>{tabRow}</div>
+        </div>
+        <div style={{ padding: "18px 16px" }}>{body}</div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ minHeight: "100vh", background: C.dark, color: C.darkText,
@@ -22,24 +77,7 @@ export function Console() {
           <div style={{ width: 26, height: 26, borderRadius: 8, background: C.accent }} />
           <span style={{ fontFamily: serif, fontSize: 19, color: C.darkText }}>SonusLabs</span>
         </div>
-        {([["agents", "Agents"], ["calls", "Calls"], ["live", "Live"], ["voice", "Voice Lab"],
-          ["analytics", "Analytics"]] as [Tab, string][]).map(([k, label]) => {
-          const on = tab === k;
-          return (
-            <div key={k} onClick={() => setTab(k)} style={{ display: "flex", alignItems: "center", gap: 11,
-              padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontSize: 14.5, fontWeight: 600,
-              background: on ? C.darkCard : "transparent", color: on ? C.darkText : C.darkMuted }}>
-              <span style={{ width: 7, height: 7, borderRadius: 2, background: on ? C.accent : "#463F32" }} />
-              {label}
-              {k === "live" && liveCount > 0 && (
-                <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 5, fontSize: 10.5,
-                  fontWeight: 700, color: C.red }}>
-                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.red, animation: "sl-livedot 1.4s infinite" }} />
-                  {liveCount}</span>
-              )}
-            </div>
-          );
-        })}
+        {tabRow}
         <div style={{ marginTop: "auto", paddingTop: 12, borderTop: `1px solid ${C.darkLine}` }}>
           <div onClick={() => nav("/create")} style={{ display: "flex", alignItems: "center", gap: 9,
             padding: "11px 12px", borderRadius: 10, cursor: "pointer", fontSize: 14, fontWeight: 600,
@@ -47,13 +85,7 @@ export function Console() {
         </div>
       </div>
 
-      <div style={{ padding: "26px 30px", overflowX: "hidden" }}>
-        {tab === "agents" && <AgentsTab />}
-        {tab === "calls" && <CallsTab />}
-        {tab === "live" && <LiveTab onCount={setLiveCount} />}
-        {tab === "voice" && <VoiceTab />}
-        {tab === "analytics" && <AnalyticsTab />}
-      </div>
+      <div style={{ padding: "26px 30px", overflowX: "hidden" }}>{body}</div>
     </div>
   );
 }
@@ -108,6 +140,7 @@ function AgentsTab() {
 }
 
 function AgentDetail({ id, onClose }: { id: string; onClose: () => void }) {
+  const mob = useIsMobile();
   const [a, setA] = useState<AgentConfig | null>(null);
   const [voices, setVoices] = useState<string[]>([]);
   const [saved, setSaved] = useState(false);
@@ -140,9 +173,9 @@ function AgentDetail({ id, onClose }: { id: string; onClose: () => void }) {
             border: "none", borderRadius: 10, padding: "9px 18px", cursor: "pointer" }}>{saved ? "Saved ✓" : "Save changes"}</button>
         </div>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 22, alignItems: "start" }}>
+      <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 340px", gap: 22, alignItems: "start" }}>
         <div style={{ ...cardPad, display: "flex", flexDirection: "column", gap: 16 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 14 }}>
             <div><div style={dlbl}>NAME</div>
               <input value={a.name} onChange={(e) => upd({ name: e.target.value })} style={dfield} /></div>
             <div><div style={dlbl}>LANGUAGE</div>
@@ -152,7 +185,7 @@ function AgentDetail({ id, onClose }: { id: string; onClose: () => void }) {
           <div><div style={dlbl}>GREETING</div>
             <textarea value={a.greeting_text} onChange={(e) => upd({ greeting_text: e.target.value })}
               style={{ ...dfield, minHeight: 56, resize: "vertical", lineHeight: 1.5 }} /></div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 14 }}>
             <div><div style={dlbl}>VOICE</div>
               <select value={a.voice} onChange={(e) => upd({ voice: e.target.value })} style={dfield}>
                 {voices.map((v) => <option key={v} value={v}>{v}</option>)}</select></div>
@@ -211,6 +244,7 @@ function AgentDetail({ id, onClose }: { id: string; onClose: () => void }) {
 
 /* ─── CALLS ─── */
 function CallsTab() {
+  const mob = useIsMobile();
   const [calls, setCalls] = useState<CallRecord[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
   const [q, setQ] = useState("");
@@ -234,11 +268,12 @@ function CallsTab() {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
         <h1 style={{ fontFamily: serif, fontWeight: 400, fontSize: 30 }}>Calls</h1>
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search transcripts…"
-          style={{ width: 260, background: C.darkCard, border: `1px solid ${C.darkLine}`, borderRadius: 10,
+          style={{ width: mob ? 150 : 260, background: C.darkCard, border: `1px solid ${C.darkLine}`, borderRadius: 10,
             padding: "10px 13px", color: C.darkText, fontSize: 14, outline: "none" }} />
       </div>
-      <div style={{ ...cardPad, padding: 0, overflow: "hidden" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "150px 1fr 70px 60px 100px 100px", gap: 12,
+      <div style={{ ...cardPad, padding: 0, overflowX: mob ? "auto" : "hidden", overflowY: "hidden" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "130px 1fr 60px 55px 90px 90px", gap: 12,
+          minWidth: mob ? 540 : undefined,
           padding: "12px 18px", fontSize: 11.5, fontWeight: 700, color: C.darkMuted, borderBottom: `1px solid ${C.darkLine}` }}>
           <span>TIME</span><span>AGENT</span><span>DUR</span><span>TURNS</span><span>PERCEIVED</span><span>OUTCOME</span>
         </div>
@@ -248,7 +283,8 @@ function CallsTab() {
           return (
             <div key={c.call_id}>
               <div onClick={() => setOpen(open === c.call_id ? null : c.call_id)} style={{ display: "grid",
-                gridTemplateColumns: "150px 1fr 70px 60px 100px 100px", gap: 12, padding: "14px 18px", fontSize: 13.5,
+                gridTemplateColumns: "130px 1fr 60px 55px 90px 90px", gap: 12, minWidth: mob ? 540 : undefined,
+                padding: "14px 18px", fontSize: 13.5,
                 borderBottom: "1px solid #241F18", cursor: "pointer", alignItems: "center" }}>
                 <span style={{ color: "#B7AD98" }}>{c.started_at ? new Date(c.started_at * 1000).toLocaleTimeString() : ""}</span>
                 <span style={{ fontWeight: 600 }}>{names[c.agent_id] || c.agent_id}</span>
@@ -387,6 +423,7 @@ function VoiceTab() {
 
 /* ─── ANALYTICS ─── */
 function AnalyticsTab() {
+  const mob = useIsMobile();
   const [calls, setCalls] = useState<CallRecord[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
   useEffect(() => {
@@ -415,7 +452,7 @@ function AnalyticsTab() {
   return (
     <>
       <h1 style={{ fontFamily: serif, fontWeight: 400, fontSize: 30, marginBottom: 18 }}>Analytics</h1>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, marginBottom: 22 }}>
+      <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(4,1fr)", gap: mob ? 12 : 16, marginBottom: 22 }}>
         {cards.map((s) => (
           <div key={s.label} style={{ ...cardPad }}>
             <div style={{ fontSize: 12, color: C.darkMuted, marginBottom: 8 }}>{s.label}</div>

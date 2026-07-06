@@ -4,6 +4,7 @@ import { Nav } from "../components/Nav";
 import { CallPanel } from "../components/CallPanel";
 import { api } from "../api";
 import { C, serif, LANGS } from "../theme";
+import { useIsMobile } from "../useIsMobile";
 
 const TAGLINES = [
   { text: "आपकी आवाज़, हमारा एआई।", font: "'Noto Serif Devanagari',serif" },
@@ -15,6 +16,10 @@ const TAGLINES = [
 
 export function Landing() {
   const nav = useNavigate();
+  const mob = useIsMobile();
+  const px = mob ? "0 16px" : "0 28px";        // section horizontal padding
+  const cols3 = mob ? "1fr" : "repeat(3,1fr)"; // 3-col grids stack on phone
+  const sect = (top: number) => `${mob ? Math.round(top * 0.55) : top}px auto 0`;
   const [teaser, setTeaser] = useState("");
   const [tag, setTag] = useState(0);
   const [tagVis, setTagVis] = useState(true);
@@ -46,8 +51,8 @@ export function Landing() {
       <Nav />
 
       {/* HERO */}
-      <div style={{ maxWidth: 1200, margin: "0 auto", padding: "56px 28px 30px",
-        display: "grid", gridTemplateColumns: "1.05fr .95fr", gap: 52, alignItems: "center" }}>
+      <div style={{ maxWidth: 1200, margin: "0 auto", padding: mob ? "26px 16px 18px" : "56px 28px 30px",
+        display: "grid", gridTemplateColumns: mob ? "1fr" : "1.05fr .95fr", gap: mob ? 26 : 52, alignItems: "center" }}>
         <div>
           <div style={{ display: "inline-flex", alignItems: "center", gap: 8, background: C.accentSoft,
             border: `1px solid ${C.accentSoftBorder}`, borderRadius: 100, padding: "6px 13px",
@@ -56,15 +61,15 @@ export function Landing() {
               animation: "sl-livedot 1.6s infinite" }} />
             Built in India · speaks 11 Indian languages
           </div>
-          <h1 style={{ fontFamily: serif, fontWeight: 400, fontSize: 60, lineHeight: 1.02,
+          <h1 style={{ fontFamily: serif, fontWeight: 400, fontSize: mob ? 38 : 60, lineHeight: 1.04,
             letterSpacing: "-.5px", marginBottom: 6 }}>The receptionist who never sleeps.</h1>
-          <div style={{ height: 40, marginBottom: 20, display: "flex", alignItems: "center", overflow: "hidden" }}>
-            <span style={{ fontFamily: TAGLINES[tag].font, fontSize: 26, color: C.accent, fontWeight: 600,
+          <div style={{ height: mob ? 32 : 40, marginBottom: 20, display: "flex", alignItems: "center", overflow: "hidden" }}>
+            <span style={{ fontFamily: TAGLINES[tag].font, fontSize: mob ? 20 : 26, color: C.accent, fontWeight: 600,
               lineHeight: 1.35, whiteSpace: "nowrap", opacity: tagVis ? 1 : 0,
               transform: tagVis ? "translateY(0)" : "translateY(8px)", transition: "opacity .32s, transform .32s" }}>
               {TAGLINES[tag].text}</span>
           </div>
-          <p style={{ fontSize: 17.5, lineHeight: 1.55, color: C.inkSoft, maxWidth: 460, marginBottom: 28 }}>
+          <p style={{ fontSize: mob ? 15.5 : 17.5, lineHeight: 1.55, color: C.inkSoft, maxWidth: 460, marginBottom: 28 }}>
             A human-sounding AI that answers your phone for any business — shop, clinic, cafe, office —
             in English, Hindi, Kannada, Telugu, Tamil and more, switching language the moment your caller does.
             Books appointments, quotes live prices, handles interruptions like a person.
@@ -87,7 +92,7 @@ export function Landing() {
       </div>
 
       {/* TRUST — business categories, not named companies (brand-neutral) */}
-      <div style={{ maxWidth: 1200, margin: "26px auto 0", padding: "0 28px" }}>
+      <div style={{ maxWidth: 1200, margin: "26px auto 0", padding: px }}>
         <div style={{ fontSize: 12, letterSpacing: ".14em", textTransform: "uppercase", color: "#A79E8B",
           textAlign: "center", marginBottom: 16 }}>Built for every kind of business</div>
         <div style={{ display: "flex", gap: 34, justifyContent: "center", flexWrap: "wrap",
@@ -98,15 +103,15 @@ export function Landing() {
       </div>
 
       {/* ONBOARDING TEASER */}
-      <div style={{ maxWidth: 1200, margin: "78px auto 0", padding: "0 28px" }}>
-        <div style={{ background: C.ink, borderRadius: 28, padding: "48px 44px", color: "#F3EEE3",
+      <div style={{ maxWidth: 1200, margin: sect(78), padding: px }}>
+        <div style={{ background: C.ink, borderRadius: 28, padding: mob ? "30px 22px" : "48px 44px", color: "#F3EEE3",
           position: "relative", overflow: "hidden" }}>
           <div style={{ position: "absolute", right: -40, top: -40, width: 260, height: 260, borderRadius: "50%",
             background: "radial-gradient(circle,rgba(224,138,30,.45),transparent 70%)" }} />
           <div style={{ position: "relative", maxWidth: 640 }}>
             <div style={{ fontSize: 13, letterSpacing: ".14em", textTransform: "uppercase", color: C.accent,
               fontWeight: 600, marginBottom: 14 }}>The two-minute setup</div>
-            <h2 style={{ fontFamily: serif, fontWeight: 400, fontSize: 40, lineHeight: 1.05, marginBottom: 14 }}>
+            <h2 style={{ fontFamily: serif, fontWeight: 400, fontSize: mob ? 28 : 40, lineHeight: 1.08, marginBottom: 14 }}>
               Paste your website. Meet your receptionist.</h2>
             <p style={{ fontSize: 16.5, lineHeight: 1.55, color: "#C9C2B4", marginBottom: 24 }}>
               SonusLabs reads your site, learns your business, and writes your agent's persona and knowledge
@@ -126,9 +131,9 @@ export function Landing() {
       </div>
 
       {/* LANGUAGES */}
-      <div style={{ maxWidth: 1200, margin: "78px auto 0", padding: "0 28px" }}>
+      <div style={{ maxWidth: 1200, margin: sect(78), padding: px }}>
         <div style={{ textAlign: "center", marginBottom: 30 }}>
-          <h2 style={{ fontFamily: serif, fontWeight: 400, fontSize: 38, marginBottom: 8 }}>
+          <h2 style={{ fontFamily: serif, fontWeight: 400, fontSize: mob ? 28 : 38, marginBottom: 8 }}>
             One receptionist. Eleven languages.</h2>
           <p style={{ fontSize: 16, color: C.muted }}>
             And she switches mid-sentence when your caller does. Tap any — she introduces herself in it.</p>
@@ -140,7 +145,8 @@ export function Landing() {
               <div key={l.v} onClick={() => playLanguage(l.v)} style={{
                 background: on ? C.accentSoft : C.paperCard,
                 border: `1px solid ${on ? C.accentSoftBorder : C.line}`, borderRadius: 14,
-                padding: "13px 18px", minWidth: 150, cursor: "pointer",
+                padding: "13px 18px", minWidth: mob ? "calc(50% - 6px)" : 150, flex: mob ? "1 1 40%" : undefined,
+                cursor: "pointer",
                 boxShadow: on ? "0 10px 26px -14px rgba(224,138,30,.5)" : "0 10px 24px -18px rgba(33,28,21,.4)",
                 textAlign: "center", transition: "background .2s, box-shadow .2s" }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
@@ -159,10 +165,10 @@ export function Landing() {
       </div>
 
       {/* HOW IT WORKS */}
-      <div style={{ maxWidth: 1200, margin: "82px auto 0", padding: "0 28px" }}>
-        <h2 style={{ fontFamily: serif, fontWeight: 400, fontSize: 38, textAlign: "center", marginBottom: 34 }}>
+      <div style={{ maxWidth: 1200, margin: sect(82), padding: px }}>
+        <h2 style={{ fontFamily: serif, fontWeight: 400, fontSize: mob ? 28 : 38, textAlign: "center", marginBottom: mob ? 22 : 34 }}>
           How it works</h2>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 20 }}>
+        <div style={{ display: "grid", gridTemplateColumns: cols3, gap: mob ? 14 : 20 }}>
           {[
             { n: "1", title: "Paste your website", body: "We research your business and draft your agent's persona, greeting and knowledge — automatically." },
             { n: "2", title: "Make her yours", body: "Edit anything, pick a voice and language, then create her with one click." },
@@ -181,9 +187,10 @@ export function Landing() {
       </div>
 
       {/* LIVE DATA */}
-      <div style={{ maxWidth: 1200, margin: "70px auto 0", padding: "0 28px" }}>
+      <div style={{ maxWidth: 1200, margin: sect(70), padding: px }}>
         <div style={{ background: "linear-gradient(100deg,#FBEBD2,#FDF6E7)", border: `1px solid ${C.accentSoftBorder}`,
-          borderRadius: 22, padding: "34px 36px", display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 26 }}>
+          borderRadius: 22, padding: mob ? "24px 22px" : "34px 36px", display: "grid",
+          gridTemplateColumns: cols3, gap: mob ? 18 : 26 }}>
           {[
             { big: "Live rates", t: "Quotes today's real prices", s: "Gold, silver, anything — live market data, not a stale number." },
             { big: "Today, IST", t: "Knows the date & time", s: "\"Come tomorrow at 4\" means the right day." },
@@ -199,12 +206,12 @@ export function Landing() {
       </div>
 
       {/* INTERRUPTION */}
-      <div style={{ maxWidth: 1200, margin: "74px auto 0", padding: "0 28px" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 44, alignItems: "center" }}>
+      <div style={{ maxWidth: 1200, margin: sect(74), padding: px }}>
+        <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: mob ? 22 : 44, alignItems: "center" }}>
           <div>
             <div style={{ fontSize: 13, letterSpacing: ".14em", textTransform: "uppercase", color: C.accent,
               fontWeight: 600, marginBottom: 12 }}>Barge-in</div>
-            <h2 style={{ fontFamily: serif, fontWeight: 400, fontSize: 38, lineHeight: 1.05, marginBottom: 14 }}>
+            <h2 style={{ fontFamily: serif, fontWeight: 400, fontSize: mob ? 28 : 38, lineHeight: 1.08, marginBottom: 14 }}>
               Talk over it. It stops. Like a person.</h2>
             <p style={{ fontSize: 16.5, lineHeight: 1.55, color: C.inkSoft }}>
               Interrupt mid-sentence and she goes quiet instantly — never talks over your caller, never loses
@@ -230,15 +237,15 @@ export function Landing() {
       </div>
 
       {/* PRICING */}
-      <div id="pricing" style={{ maxWidth: 1200, margin: "84px auto 0", padding: "0 28px", scrollMarginTop: 80 }}>
+      <div id="pricing" style={{ maxWidth: 1200, margin: sect(84), padding: px, scrollMarginTop: 70 }}>
         <div style={{ textAlign: "center", marginBottom: 32 }}>
-          <h2 style={{ fontFamily: serif, fontWeight: 400, fontSize: 40, marginBottom: 8 }}>
+          <h2 style={{ fontFamily: serif, fontWeight: 400, fontSize: mob ? 30 : 40, marginBottom: 8 }}>
             Honest, per-minute pricing.</h2>
           <p style={{ fontSize: 16, color: C.muted }}>
             Indian prices for Indian businesses. <span style={{ color: C.accentDeep, fontWeight: 600 }}>
             You only pay for minutes you actually use.</span></p>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 20 }}>
+        <div style={{ display: "grid", gridTemplateColumns: cols3, gap: mob ? 14 : 20 }}>
           {PLANS.map((p) => (
             <div key={p.name} style={{ background: p.featured ? C.ink : C.paperCard,
               border: `1.5px solid ${p.featured ? C.ink : C.line}`, borderRadius: 22, padding: "30px 26px",
@@ -272,9 +279,9 @@ export function Landing() {
       </div>
 
       {/* CTA */}
-      <div style={{ maxWidth: 1200, margin: "84px auto 0", padding: "0 28px 20px" }}>
-        <div style={{ textAlign: "center", padding: "40px 20px" }}>
-          <h2 style={{ fontFamily: serif, fontWeight: 400, fontSize: 44, lineHeight: 1.05, marginBottom: 8 }}>
+      <div style={{ maxWidth: 1200, margin: sect(84), padding: mob ? "0 16px 20px" : "0 28px 20px" }}>
+        <div style={{ textAlign: "center", padding: mob ? "28px 4px" : "40px 20px" }}>
+          <h2 style={{ fontFamily: serif, fontWeight: 400, fontSize: mob ? 30 : 44, lineHeight: 1.08, marginBottom: 8 }}>
             Meet your receptionist.</h2>
           <div style={{ fontFamily: "'Noto Serif Devanagari',serif", fontSize: 20, color: C.accent, marginBottom: 22 }}>
             ग्यारह भाषाएँ · एक आवाज़</div>
@@ -284,8 +291,8 @@ export function Landing() {
         </div>
       </div>
       <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 30 }}>
-        <div style={{ maxWidth: 1200, margin: "0 auto", padding: "26px 28px", display: "flex",
-          justifyContent: "space-between", flexWrap: "wrap", gap: 16, color: C.faint, fontSize: 13 }}>
+        <div style={{ maxWidth: 1200, margin: "0 auto", padding: mob ? "20px 16px" : "26px 28px", display: "flex",
+          justifyContent: "space-between", flexWrap: "wrap", gap: 12, color: C.faint, fontSize: 12.5 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
             <span style={{ fontFamily: serif, fontSize: 18, color: C.ink }}>SonusLabs</span>
             <span>· The receptionist who never sleeps.</span></div>

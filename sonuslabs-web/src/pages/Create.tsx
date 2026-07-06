@@ -5,6 +5,7 @@ import { Orb } from "../components/Orb";
 import { CallPanel } from "../components/CallPanel";
 import { api, AgentConfig } from "../api";
 import { C, serif, LANGS } from "../theme";
+import { useIsMobile } from "../useIsMobile";
 
 const RESEARCH_LINES = [
   "Reading your website…", "Learning what you do…", "Asking around about you…",
@@ -13,6 +14,7 @@ const RESEARCH_LINES = [
 
 export function Create() {
   const nav = useNavigate();
+  const mob = useIsMobile();
   const loc = useLocation() as { state?: { url?: string } };
   const [step, setStep] = useState(1);
   const [url, setUrl] = useState(loc.state?.url || "");
@@ -69,7 +71,7 @@ export function Create() {
     <div style={{ minHeight: "100vh", backgroundColor: C.paper,
       backgroundImage: "radial-gradient(#E7DFCF 1.1px,transparent 1.1px)", backgroundSize: "24px 24px" }}>
       <Nav />
-      <div style={{ maxWidth: 820, margin: "0 auto", padding: "40px 28px 70px" }}>
+      <div style={{ maxWidth: 820, margin: "0 auto", padding: mob ? "26px 16px 50px" : "40px 28px 70px" }}>
         {/* progress dots */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginBottom: 34 }}>
           {[1, 2, 3, 4].map((n, i) => (
@@ -140,7 +142,7 @@ export function Create() {
             </div>
             <div style={{ background: C.paperCard, border: `1px solid ${C.line}`, borderRadius: 20, padding: 26,
               display: "flex", flexDirection: "column", gap: 20 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+              <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 16 }}>
                 <div><label style={lbl}>NAME</label>
                   <input value={draft.name} onChange={(e) => upd({ name: e.target.value })} style={field} /></div>
                 <div><label style={lbl}>LANGUAGE</label>
