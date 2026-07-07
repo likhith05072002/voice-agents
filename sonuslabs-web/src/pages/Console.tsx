@@ -271,6 +271,7 @@ function AgentsTab() {
 
 function AgentDetail({ id, onClose }: { id: string; onClose: () => void }) {
   const mob = useIsMobile();
+  const { telephony } = useAuth();
   const [a, setA] = useState<AgentConfig | null>(null);
   const [voices, setVoices] = useState<string[]>([]);
   const [saved, setSaved] = useState(false);
@@ -358,13 +359,21 @@ function AgentDetail({ id, onClose }: { id: string; onClose: () => void }) {
               forceVoice={a.voice} forcePace={a.voice_pace} /></div>
           <div style={{ ...cardPad }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: C.darkMuted, marginBottom: 10 }}>TEST-CALL MY PHONE</div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+91 98…"
-                style={{ ...dfield, flex: 1 }} />
-              <button onClick={callMe} style={{ fontWeight: 600, color: C.ink, background: C.accent, border: "none",
-                borderRadius: 9, padding: "10px 14px", cursor: "pointer", whiteSpace: "nowrap" }}>Call me</button>
-            </div>
-            {callMsg && <div style={{ fontSize: 12.5, color: "#B7AD98", marginTop: 8 }}>{callMsg}</div>}
+            {telephony ? (<>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+91 98…"
+                  style={{ ...dfield, flex: 1 }} />
+                <button onClick={callMe} style={{ fontWeight: 600, color: C.ink, background: C.accent, border: "none",
+                  borderRadius: 9, padding: "10px 14px", cursor: "pointer", whiteSpace: "nowrap" }}>Call me</button>
+              </div>
+              {callMsg && <div style={{ fontSize: 12.5, color: "#B7AD98", marginTop: 8 }}>{callMsg}</div>}
+            </>) : (
+              <div style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 13, color: C.darkMuted, lineHeight: 1.5 }}>
+                <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase",
+                  color: C.accent, border: `1px solid ${C.darkLine}`, borderRadius: 6, padding: "2px 7px" }}>Coming soon</span>
+                <span>Phone calls launch soon. For now, talk to your agent with the orb, or use the live API.</span>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -715,7 +724,7 @@ const CARRIERS: { id: string; label: string; region: "IN" | "US"; codes: [string
 ];
 
 function PhoneTab() {
-  const { user } = useAuth();
+  const { user, telephony } = useAuth();
   const [data, setData] = useState<{ numbers: import("../api").OwnedNumber[];
     available: import("../api").NumberStock[] } | null>(null);
   const [agents, setAgents] = useState<AgentLite[]>([]);
@@ -741,6 +750,30 @@ function PhoneTab() {
 
   if (!user) return <div style={{ color: C.darkMuted, fontSize: 14 }}>
     Phone numbers need an account — this server runs in legacy mode.</div>;
+
+  // No telephony wired (the PAYG launch) → the whole tab is a coming-soon teaser.
+  if (!telephony) {
+    return (
+      <div style={{ maxWidth: 620 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+          <div style={{ fontFamily: SF, fontSize: 24 }}>Phone</div>
+          <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase",
+            color: C.accent, border: `1px solid ${C.darkLine}`, borderRadius: 6, padding: "3px 8px" }}>Coming soon</span>
+        </div>
+        <div style={{ ...cardPad, lineHeight: 1.7, color: "#CFC7B6", fontSize: 14 }}>
+          <p style={{ marginBottom: 12 }}>Give your agent a real phone number, or forward your existing business
+            number to it — callers dial the number they know, your AI answers. <b>Launching soon.</b></p>
+          <p style={{ color: C.darkMuted, fontSize: 13.5, marginBottom: 0 }}>
+            Available today: talk to your agents in the browser (the orb), and build them into your
+            own product over the <a href="/docs/phone-numbers" target="_blank" rel="noreferrer"
+              style={{ color: C.accent, fontWeight: 700, textDecoration: "none" }}>API</a>.
+            Want early access to phone numbers? Email <span style={{ color: "#CFC7B6" }}>hello@sonuslabs.online</span>.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   if (!data) return <div style={{ color: C.darkMuted, fontSize: 14 }}>Loading…</div>;
 
   const stock = data.available.find((a) => a.country === countrySel);

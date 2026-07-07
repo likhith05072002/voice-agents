@@ -16,6 +16,7 @@ interface AuthState {
   enabled: boolean;            // accounts mode off (legacy server) -> no gating
   user: AuthUser | null;
   isAdmin: boolean;            // platform operator (ADMIN_EMAILS)
+  telephony: boolean;          // real phone calling wired (else "coming soon")
   workspaces: Workspace[];
   wsId: string;
   setWsId: (id: string) => void;
@@ -42,13 +43,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [enabled, setEnabled] = useState(true);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [telephony, setTelephony] = useState(false);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [wsId, setWsIdState] = useState("");
 
-  const apply = useCallback((me: { enabled: boolean; user: AuthUser | null; workspaces: Workspace[]; is_admin?: boolean }) => {
+  const apply = useCallback((me: { enabled: boolean; user: AuthUser | null; workspaces: Workspace[]; is_admin?: boolean; telephony?: boolean }) => {
     setEnabled(me.enabled);
     setUser(me.user);
     setIsAdmin(!!me.is_admin);
+    setTelephony(!!me.telephony);
     setWorkspaces(me.workspaces);
     const ws = me.user ? pickWs(me.workspaces) : "";
     setWorkspaceHeader(ws);          // BEFORE children render and fetch
@@ -85,7 +88,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <Ctx.Provider value={{ loading, enabled, user, isAdmin, workspaces, wsId, setWsId, refresh, logout }}>
+    <Ctx.Provider value={{ loading, enabled, user, isAdmin, telephony, workspaces, wsId, setWsId, refresh, logout }}>
       {children}
     </Ctx.Provider>
   );

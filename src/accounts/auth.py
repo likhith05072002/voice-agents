@@ -52,6 +52,14 @@ def accounts_enabled() -> bool:
     return bool(settings.database_url)
 
 
+def telephony_enabled() -> bool:
+    """Is real phone calling wired up? (Telnyx configured + a public webhook
+    URL to receive events.) False on the PAYG launch where prod has no Telnyx —
+    the console then shows the calling features as 'coming soon'."""
+    return bool(settings.telnyx_connection_id and settings.telnyx_api_key
+                and settings.public_url)
+
+
 def _signer() -> URLSafeTimedSerializer:
     if not settings.session_secret:
         raise RuntimeError("SESSION_SECRET required in accounts mode")
@@ -159,14 +167,15 @@ async def _login_and_redirect(user_row: dict, nxt: str, request: Request) -> Red
 
 @router.get("/auth/me")
 async def auth_me(request: Request):
+    tel = telephony_enabled()
     if not accounts_enabled():
-        return {"enabled": False, "user": None, "workspaces": []}
+        return {"enabled": False, "user": None, "workspaces": [], "telephony": tel}
     user = await current_user(request)
     if user is None:
-        return {"enabled": True, "user": None, "workspaces": []}
+        return {"enabled": True, "user": None, "workspaces": [], "telephony": tel}
     public = {k: user[k] for k in ("id", "email", "name", "picture")}
     return {"enabled": True, "user": public, "is_admin": is_admin(user),
-            "workspaces": await repo.workspaces_for(user["id"])}
+            "telephony": tel, "workspaces": await repo.workspaces_for(user["id"])}
 
 
 @router.get("/auth/google/login")

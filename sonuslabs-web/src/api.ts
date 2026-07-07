@@ -65,7 +65,7 @@ export interface Workspace {
 }
 export interface AuthMe {
   enabled: boolean; user: AuthUser | null; workspaces: Workspace[];
-  is_admin?: boolean;
+  is_admin?: boolean; telephony?: boolean;
 }
 
 export interface AdminOverview {
