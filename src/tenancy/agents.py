@@ -49,6 +49,10 @@ class AgentConfig:
     system_prompt: str = ""
     greeting_text: str = ""
     idle_reprompt_text: str = ""
+    # Hard cap on sentences spoken per reply (0 = unlimited). Deterministic
+    # backstop for small models that ignore "keep it short" prompt rules —
+    # heard live: a 5-sentence identity ramble from the demo agent.
+    max_reply_sentences: int = 0
 
     # Turn-taking behavior
     eagerness: str = "balanced"

@@ -16,6 +16,8 @@ for _ext in ("", "-wal", "-shm"):
         pass
 
 os.environ.setdefault("SARVAM_API_KEY", "test")
+# Blank, not fake: cloning endpoints must 503 in tests, never call Inworld.
+os.environ.setdefault("INWORLD_API_KEY", "")
 os.environ.setdefault("ENABLE_PERSISTENCE", "false")
 os.environ.setdefault("OUTBOUND_API_KEY", "secret")
 os.environ.setdefault("ADMIN_API_KEY", "admin-secret")

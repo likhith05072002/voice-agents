@@ -11,12 +11,15 @@ The brain lives in ``src.pipeline.turn_engine``; this module is just I/O glue.
 import asyncio
 import audioop
 import base64
+import dataclasses
 import json
 import os
 import re
+import secrets
 import time
 from contextlib import asynccontextmanager
 
+import httpx
 import structlog
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import JSONResponse
@@ -29,6 +32,7 @@ from src.security.telnyx import verify_telnyx_signature
 from src.services.stt.sarvam import SarvamSTTClient
 from src.services.llm.sarvam import SarvamLLMClient
 from src.services.tts.sarvam import SarvamTTSClient, KNOWN_VOICES
+from src.services.tts.inworld import InworldTTSClient
 from src.pipeline.filler import FillerPlayer
 from src.util.ratelimit import TokenBucket, SessionLimiter
 from src.tenancy.agents import agent_from_settings
@@ -187,10 +191,65 @@ def _billed_end(ws: str) -> None:
         _billed_active[ws] = n
 
 
+def _sonuslabs_demo_agent() -> AgentConfig:
+    """The landing-page demo agent, defined in code so it can never fall back
+    to the settings default persona (which is the jewellery demo — heard live:
+    the orb greeted callers with 'Nama Srinivasa Jewellery'). A DB/agents-file
+    'sonuslabs' still wins if one is added later (hydration overwrites)."""
+    return AgentConfig(
+        agent_id="sonuslabs",
+        name="SonusLabs",
+        language="en-IN",
+        voice="neha",
+        system_prompt=(
+            "You are Neha, the AI receptionist demo for SonusLabs — a voice-AI "
+            "platform that answers business phones in English, Hindi, Telugu, "
+            "Kannada, Tamil and more. RULES, in order: "
+            "(1) ANSWER the caller's question directly with real information "
+            "in your very first sentence. NEVER reply to a question with "
+            "another question. NEVER repeat or rephrase the caller's words "
+            "back to them. NEVER start a reply with filler like 'అవును', "
+            "'हाँ', 'सरे', or 'Yes,'. "
+            "(2) Reply in the SAME language the caller is speaking — but if "
+            "they ASK you to speak some language, switch to it immediately. "
+            "(3) Keep answers SHORT: 1-2 sentences, never more. "
+            "(4) General-knowledge questions (like what Google does) are a "
+            "chance to show off: answer them briefly and correctly, then you "
+            "may steer back to SonusLabs. "
+            "(5) If asked who you are, reply with EXACTLY this one sentence "
+            "and stop: 'I'm Neha, the SonusLabs AI receptionist demo.' "
+            "About SonusLabs: an AI receptionist that answers business calls "
+            "24/7, books appointments, answers customer questions, switches "
+            "languages mid-call, and can even speak in the owner's own cloned "
+            "voice; pay-as-you-go from Rs. 3 per minute, no app to install, "
+            "works with your existing number. If you truly don't know "
+            "something, say so plainly and suggest sonuslabs.ai."
+        ),
+        greeting_text=(
+            "Hi! I'm Neha from SonusLabs — your AI receptionist demo. "
+            "Ask me anything, in any language!"
+        ),
+        # Live web answers: "do some research on X" / news / prices trigger a
+        # deterministic prefetch (assistant tool set) — heard live: the demo
+        # said "I don't have information on that" to an explicit research ask.
+        enable_tools=True,
+        tool_sets=["assistant"],
+        enable_rag=False,
+        # ~0.95 reads calmer/more human (same tuning note as the phone agents);
+        # heard live: a caller asked the clone "why do you speak so fast?".
+        voice_pace=0.95,
+        # sarvam-30b ignores "1-2 sentences" often enough (5-sentence identity
+        # ramble heard live) that the demo gets the deterministic engine cap.
+        max_reply_sentences=2,
+    )
+
+
 def _build_agent_store() -> AgentStore:
-    """Default agent from global settings (single-tenant compat), plus any
-    agents declared in AGENTS_FILE (multi-tenant)."""
+    """Default agent from global settings (single-tenant compat), plus the
+    built-in landing demo agent, plus any agents declared in AGENTS_FILE
+    (multi-tenant)."""
     store = AgentStore([agent_from_settings(settings)], default_id="default")
+    store.add(_sonuslabs_demo_agent())
     if settings.agents_file:
         try:
             for a in load_agents_json(settings.agents_file):
@@ -378,6 +437,12 @@ async def create_agent(request: Request):
     body.pop("workspace_id", None)             # server-controlled, never client
     if (verr := _validate_agent_body(body)) is not None:
         return JSONResponse({"error": verr}, status_code=400)
+    # Cloned voices are provisioned ONLY by the voice-clone endpoint — a raw
+    # inworld id here could be another tenant's clone driven through our key.
+    if str(body.get("voice") or "").startswith("inworld:"):
+        return JSONResponse(
+            {"error": "cloned voices are set via the voice-clone endpoint"},
+            status_code=400)
     agent = AgentConfig.from_dict(body)
     if ws is not None:
         # Accounts mode: agent belongs to the caller's workspace, and the id is
@@ -405,6 +470,20 @@ async def update_agent(agent_id: str, request: Request):
     body = await request.json()
     if (verr := _validate_agent_body(body)) is not None:
         return JSONResponse({"error": verr}, status_code=400)
+    # An inworld voice may only pass through unchanged (console re-saving the
+    # agent). Setting a DIFFERENT clone id is the voice-clone endpoint's job —
+    # otherwise any signed-in user could speak through any tenant's clone.
+    v = str(body.get("voice") or "")
+    if v.startswith("inworld:") and v != existing.voice:
+        return JSONResponse(
+            {"error": "cloned voices are set via the voice-clone endpoint"},
+            status_code=400)
+    # Switching a cloned agent back to a stock voice abandons the clone —
+    # free its Inworld slot (best-effort) instead of leaking it.
+    if (existing.voice.startswith("inworld:") and v and v != existing.voice
+            and settings.inworld_api_key):
+        asyncio.ensure_future(
+            _inworld_delete_voice(existing.voice.split(":", 1)[1]))
     # id + owning workspace are immutable regardless of what the body says.
     merged = {**existing.to_dict(), **body,
               "agent_id": agent_id, "workspace_id": existing.workspace_id}
@@ -1034,6 +1113,220 @@ async def voice_lab():
     return {"voices": VOICE_LAB_CANDIDATES}
 
 
+# ─── Voice cloning (Inworld): "Clone your voice" on the demo widget ───
+# English/Hindi only. Slots are scarce on Inworld's on-demand plan (5 custom
+# voices), so every demo clone is short-lived by design: tracked in-process,
+# expired by TTL, evicted oldest-first when the cap is hit, and orphans from a
+# previous process swept via the "__demo-" voiceId marker. Only voice IDs this
+# server itself created are accepted on /web-call — nobody can drive arbitrary
+# voices through our key.
+
+INWORLD_VOICES_URL = "https://api.inworld.ai/voices/v1/voices"
+_demo_clones: dict[str, float] = {}          # voiceId -> monotonic created-at
+_DEMO_CLONE_TTL_S = 30 * 60
+_DEMO_CLONE_MAX = 1                          # persistent agent clones share the
+                                             # 5-slot plan cap — demo gets ONE
+_clone_last_by_ip: dict[str, float] = {}
+_CLONE_IP_COOLDOWN_S = 45
+_CLONE_LANGS = {"en": "EN_US", "hi": "HI_IN"}
+
+
+def _inworld_headers() -> dict[str, str]:
+    return {"Authorization": f"Basic {settings.inworld_api_key}"}
+
+
+async def _inworld_delete_voice(voice_id: str) -> bool:
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as c:
+            r = await c.delete(f"{INWORLD_VOICES_URL}/{voice_id}",
+                               headers=_inworld_headers())
+        ok = r.status_code == 200
+        logger.info("clone.deleted" if ok else "clone.delete_failed",
+                    voice_id=voice_id, status=r.status_code)
+        return ok
+    except Exception as e:  # noqa: BLE001
+        logger.warning("clone.delete_error", voice_id=voice_id, error=str(e))
+        return False
+
+
+async def _reap_demo_clones(make_room: bool = False) -> None:
+    """Free clone slots: TTL-expired first, then orphans from earlier runs
+    (identified by the '__demo-' marker in the voiceId), then — only if a new
+    clone needs the room — the oldest live demo clone."""
+    now = time.monotonic()
+    for vid in [v for v, t in _demo_clones.items()
+                if now - t > _DEMO_CLONE_TTL_S]:
+        if await _inworld_delete_voice(vid):
+            _demo_clones.pop(vid, None)
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as c:
+            r = await c.get("https://api.inworld.ai/tts/v1/voices",
+                            headers=_inworld_headers())
+        for v in r.json().get("voices", []):
+            vid = v.get("voiceId", "")
+            if v.get("isCustom") and "__demo-" in vid and vid not in _demo_clones:
+                await _inworld_delete_voice(vid)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("clone.sweep_failed", error=str(e))
+    while make_room and len(_demo_clones) >= _DEMO_CLONE_MAX:
+        oldest = min(_demo_clones, key=_demo_clones.get)  # type: ignore[arg-type]
+        await _inworld_delete_voice(oldest)
+        _demo_clones.pop(oldest, None)
+
+
+def _validate_clone_audio(audio_b64: str) -> str | None:
+    """Shared sample checks for demo AND agent clones. None = acceptable."""
+    if len(audio_b64) > 2_000_000:    # ~1.4MB raw ≈ 45s of 16k PCM16: way past need
+        return "sample too large"
+    try:
+        raw = base64.b64decode(audio_b64)
+    except Exception:  # noqa: BLE001
+        return "invalid audio"
+    if len(raw) < 100_000:                 # <~3s of 16k PCM16 — Inworld needs 3s+
+        return "sample too short — record at least 4 seconds"
+    return None
+
+
+async def _inworld_clone(display_name: str, audio_b64: str,
+                         lang_code: str = "EN_US",
+                         tags: list[str] | None = None
+                         ) -> tuple[str | None, str | None]:
+    """Create an Inworld voice from a sample. → (voice_id, None) on success,
+    (None, user-facing error) on failure — slot exhaustion gets its own
+    message so the console can say WHY cloning stopped working."""
+    payload = {
+        "displayName": display_name,
+        "langCode": lang_code,
+        "voiceSamples": [{"audioData": audio_b64}],
+        "tags": tags or [],
+        "audioProcessingConfig": {"removeBackgroundNoise": True},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as c:
+            r = await c.post(f"{INWORLD_VOICES_URL}:clone",
+                             headers=_inworld_headers(), json=payload)
+    except Exception as e:  # noqa: BLE001
+        logger.error("clone.request_failed", error=str(e))
+        return None, "cloning service unreachable"
+    if r.status_code != 200:
+        detail = r.text[:300]
+        logger.error("clone.failed", status=r.status_code, detail=detail)
+        if any(w in detail.lower() for w in ("limit", "quota", "maximum", "exceed")):
+            return None, ("all voice slots are in use — remove an unused "
+                          "cloned voice or upgrade the Inworld plan")
+        return None, "cloning failed — try a longer, clearer recording"
+    vid = (r.json().get("voice") or {}).get("voiceId", "")
+    if not vid:
+        return None, "cloning failed"
+    return vid, None
+
+
+class CloneVoiceBody(BaseModel):
+    audio_b64: str                     # WAV (PCM16 mono 16k), base64
+    language: str = "en"               # "en" | "hi"
+
+
+@app.post("/voice-clone")
+async def voice_clone(body: CloneVoiceBody, request: Request):
+    if not settings.inworld_api_key:
+        return JSONResponse({"error": "voice cloning is not configured"},
+                            status_code=503)
+    lang = _CLONE_LANGS.get(body.language)
+    if lang is None:
+        return JSONResponse({"error": "language must be 'en' or 'hi'"},
+                            status_code=400)
+    if (aerr := _validate_clone_audio(body.audio_b64)) is not None:
+        code = 413 if aerr == "sample too large" else 400
+        return JSONResponse({"error": aerr}, status_code=code)
+    ip = request.client.host if request.client else "?"
+    now = time.monotonic()
+    if now - _clone_last_by_ip.get(ip, -1e9) < _CLONE_IP_COOLDOWN_S:
+        return JSONResponse({"error": "please wait a moment between clones"},
+                            status_code=429)
+    _clone_last_by_ip[ip] = now
+    await _reap_demo_clones(make_room=True)
+    vid, cerr = await _inworld_clone(f"demo-{secrets.token_hex(4)}",
+                                     body.audio_b64, lang_code=lang,
+                                     tags=["demo-clone"])
+    if vid is None:
+        return JSONResponse({"error": cerr}, status_code=502)
+    _demo_clones[vid] = time.monotonic()
+    logger.info("clone.created", voice_id=vid, language=body.language)
+    return {"voice_id": vid, "expires_in_s": _DEMO_CLONE_TTL_S}
+
+
+@app.delete("/voice-clone/{voice_id}")
+async def voice_clone_delete(voice_id: str):
+    """Early cleanup (page close). Only demo-registry ids are deletable."""
+    if voice_id not in _demo_clones:
+        return JSONResponse({"error": "unknown clone"}, status_code=404)
+    if await _inworld_delete_voice(voice_id):
+        _demo_clones.pop(voice_id, None)
+        return {"deleted": voice_id}
+    return JSONResponse({"error": "delete failed"}, status_code=502)
+
+
+# ─── Persistent clones: a workspace agent speaks in its owner's voice ───
+# This is the ONLY path that may set an "inworld:" voice on an agent — the
+# agent CRUD endpoints reject client-supplied inworld ids, so one tenant can
+# never point an agent at another tenant's clone through our key.
+
+async def _clone_agent_ctx(agent_id: str, request: Request):
+    """Auth + ownership shared by the agent-clone endpoints."""
+    user, ws, err = await _console_ctx(request)
+    if err is not None:
+        return None, err
+    agent = _agent_manager.get(agent_id)
+    if agent is None or (ws is not None and agent.workspace_id != ws):
+        return None, JSONResponse({"error": "not found"}, status_code=404)
+    return agent, None
+
+
+@app.post("/agents/{agent_id}/voice-clone")
+async def agent_voice_clone(agent_id: str, request: Request):
+    if not settings.inworld_api_key:
+        return JSONResponse({"error": "voice cloning is not configured"},
+                            status_code=503)
+    agent, err = await _clone_agent_ctx(agent_id, request)
+    if err is not None:
+        return err
+    body = await request.json()
+    audio_b64 = body.get("audio_b64") or ""
+    if (aerr := _validate_clone_audio(audio_b64)) is not None:
+        code = 413 if aerr == "sample too large" else 400
+        return JSONResponse({"error": aerr}, status_code=code)
+    slug = re.sub(r"[^a-z0-9-]", "", agent_id.lower())[:24]
+    vid, cerr = await _inworld_clone(f"agent-{slug}-{secrets.token_hex(2)}",
+                                     audio_b64, tags=["agent-clone", agent_id])
+    if vid is None:
+        return JSONResponse({"error": cerr}, status_code=502)
+    old_voice = agent.voice
+    merged = agent.to_dict()
+    merged["voice"] = f"inworld:{vid}"
+    await _agent_manager.update(AgentConfig.from_dict(merged))
+    if old_voice.startswith("inworld:"):     # re-record: free the old slot
+        await _inworld_delete_voice(old_voice.split(":", 1)[1])
+    logger.info("clone.agent_created", agent=agent_id, voice_id=vid)
+    return {"voice_id": vid, "voice": f"inworld:{vid}"}
+
+
+@app.delete("/agents/{agent_id}/voice-clone")
+async def agent_voice_clone_delete(agent_id: str, request: Request):
+    agent, err = await _clone_agent_ctx(agent_id, request)
+    if err is not None:
+        return err
+    if not agent.voice.startswith("inworld:"):
+        return JSONResponse({"error": "agent has no cloned voice"},
+                            status_code=404)
+    vid = agent.voice.split(":", 1)[1]
+    merged = agent.to_dict()
+    merged["voice"] = "neha"                 # sensible stock default
+    await _agent_manager.update(AgentConfig.from_dict(merged))
+    await _inworld_delete_voice(vid)         # best-effort; agent already reverted
+    logger.info("clone.agent_deleted", agent=agent_id, voice_id=vid)
+    return {"voice": "neha", "deleted": vid}
+
+
 # ─── Website widget: the drop-in embed script clients put on their site ───
 @app.get("/embed.js")
 async def embed_js():
@@ -1237,12 +1530,70 @@ async def web_call(websocket: WebSocket):
                 call_pace = p
         except (TypeError, ValueError):
             pass
-        tts = SarvamTTSClient(settings.sarvam_api_key, model=settings.sarvam_tts_model,
-                              pace=call_pace)
-        # Wideband: bulbul synthesizes natively at 24k — the browser has no
-        # telephony codec constraint, so it gets 16k PCM (2x the voice quality
-        # of the 8k phone channel).
-        await tts.connect(language=agent.language, voice=call_voice, sample_rate="16000")
+        # Cloned voice routing — two server-verified sources only:
+        #  1. a demo clone THIS process created (?voice=inworld:<id> must be
+        #     in the registry), or the agent's own saved clone echoed back by
+        #     the console editor (?voice == agent.voice);
+        #  2. the agent's persistent clone from its config (set exclusively by
+        #     the authed voice-clone endpoint).
+        # An arbitrary inworld id in the URL can't ride on our Inworld key.
+        inworld_vid = None
+        if settings.inworld_api_key:
+            if (req_voice or "").startswith("inworld:"):
+                vid = req_voice.split(":", 1)[1]
+                if vid in _demo_clones or req_voice == agent.voice:
+                    inworld_vid = vid
+            elif (agent.voice.startswith("inworld:")
+                    and req_voice not in VOICE_LAB_CANDIDATES):
+                inworld_vid = agent.voice.split(":", 1)[1]
+        if inworld_vid:
+            tts = InworldTTSClient(settings.inworld_api_key,
+                                   model=settings.inworld_tts_model,
+                                   pace=call_pace)
+            await tts.connect(language=agent.language, voice=inworld_vid,
+                              sample_rate="16000")
+            logger.info("webcall.cloned_voice", voice_id=inworld_vid)
+        else:
+            tts = SarvamTTSClient(settings.sarvam_api_key, model=settings.sarvam_tts_model,
+                                  pace=call_pace)
+            # Wideband: bulbul synthesizes natively at 24k — the browser has no
+            # telephony codec constraint, so it gets 16k PCM (2x the voice quality
+            # of the 8k phone channel).
+            await tts.connect(language=agent.language, voice=call_voice, sample_rate="16000")
+
+        # The landing demo must introduce itself as the voice it ACTUALLY
+        # speaks with: a stock voice greets by its own name, and a cloned
+        # voice claims no name at all (heard live: a male caller's clone
+        # introduced itself as "Neha"). replace() copies for this call only —
+        # the store's agent is never mutated.
+        if agent.agent_id == "sonuslabs":
+            if inworld_vid:
+                agent = dataclasses.replace(
+                    agent,
+                    greeting_text=("Hi! Yes — this is your own voice speaking. "
+                                   "I'm your SonusLabs receptionist demo. "
+                                   "Ask me anything, in any language!"),
+                    system_prompt=agent.system_prompt.replace(
+                        "You are Neha, the AI receptionist demo",
+                        "You are an AI receptionist demo speaking in the "
+                        "caller's own cloned voice — never call yourself Neha",
+                    ).replace(
+                        "(5) If asked who you are, reply with EXACTLY this "
+                        "one sentence and stop: 'I'm Neha, the SonusLabs AI "
+                        "receptionist demo.' ",
+                        "(5) If asked who you are, reply with EXACTLY this "
+                        "one sentence and stop: 'I'm your own voice, cloned "
+                        "as a SonusLabs receptionist demo — I could answer "
+                        "your business calls sounding just like this.' ",
+                    ),
+                )
+            elif call_voice and call_voice != "neha":
+                v = call_voice.capitalize()
+                agent = dataclasses.replace(
+                    agent,
+                    greeting_text=agent.greeting_text.replace("Neha", v),
+                    system_prompt=agent.system_prompt.replace("Neha", v),
+                )
 
         # Coalesce 20ms frames into 80ms batches: 50 tiny buffers/sec made the
         # browser schedule a new AudioBufferSource every 20ms, and the
@@ -1488,8 +1839,18 @@ async def media_stream(websocket: WebSocket):
                              if agent.llm_reasoning_effort
                              else settings.sarvam_llm_reasoning_effort,
         )
-        tts = SarvamTTSClient(settings.sarvam_api_key, model=settings.sarvam_tts_model,
-                              pace=agent.voice_pace)
+        # Phone calls speak the agent's persistent clone too — same 8kHz PCM16
+        # contract as Sarvam, so the engine's mulaw framing is untouched.
+        phone_vid = (agent.voice.split(":", 1)[1]
+                     if agent.voice.startswith("inworld:")
+                     and settings.inworld_api_key else None)
+        if phone_vid:
+            tts = InworldTTSClient(settings.inworld_api_key,
+                                   model=settings.inworld_tts_model,
+                                   pace=agent.voice_pace)
+        else:
+            tts = SarvamTTSClient(settings.sarvam_api_key, model=settings.sarvam_tts_model,
+                                  pace=agent.voice_pace)
 
         dsp = None
         if (agent.enable_input_dsp or agent.enable_echo_cancellation
@@ -1544,13 +1905,16 @@ async def media_stream(websocket: WebSocket):
         # time-to-greeting (measured by the synthetic caller).
         await asyncio.gather(
             stt.connect(language=agent.language),
-            tts.connect(language=agent.language, voice=agent.voice, sample_rate="8000"),
+            tts.connect(language=agent.language,
+                        voice=phone_vid or agent.voice, sample_rate="8000"),
         )
 
         # Pre-rendered greeting: instant "hello" instead of ~3.5s cold TTS
-        # (REST-rendered, disk-cached per text+language+voice).
+        # (REST-rendered, disk-cached per text+language+voice). Cloned voices
+        # skip it — the renderer is Sarvam-only; the engine speaks the
+        # greeting live through Inworld instead.
         greeting_audio = None
-        if agent.greeting_text:
+        if agent.greeting_text and not phone_vid:
             try:
                 from src.testing.caller import render_utterances
                 rendered = await render_utterances(

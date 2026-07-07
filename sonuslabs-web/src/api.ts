@@ -200,6 +200,15 @@ export const api = {
     }),
 
   voiceLab: () => j<{ voices: string[] }>("/voice-lab"),
+  cloneVoice: (language: "en" | "hi", audio_b64: string) =>
+    j<{ voice_id: string; expires_in_s: number }>("/voice-clone", {
+      method: "POST", body: JSON.stringify({ language, audio_b64 }) }),
+  cloneAgentVoice: (agentId: string, audio_b64: string) =>
+    j<{ voice_id: string; voice: string }>(`/agents/${agentId}/voice-clone`, {
+      method: "POST", body: JSON.stringify({ audio_b64 }) }),
+  deleteAgentVoice: (agentId: string) =>
+    j<{ voice: string; deleted: string }>(`/agents/${agentId}/voice-clone`, {
+      method: "DELETE" }),
   voiceSampleUrl: (voice: string) => `${API_BASE}/voice-sample/${voice}`,
   languageSampleUrl: (lang: string) => `${API_BASE}/language-sample/${lang}`,
 

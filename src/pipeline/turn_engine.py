@@ -212,6 +212,7 @@ class TurnEngine:
         reprompt_text: str = "",
         enable_language_switch: bool = False,
         enable_human_expression: bool = True,
+        max_reply_sentences: int = 0,
         knowledge=None,
         router=None,
         on_transcript=None,
@@ -270,6 +271,7 @@ class TurnEngine:
         self.reprompt_text = reprompt_text
         self.enable_language_switch = enable_language_switch
         self.enable_human_expression = enable_human_expression
+        self.max_reply_sentences = max_reply_sentences
         self._caller_language = ""
         self._lang_candidate = ""       # sticky-switch staging (see _track_language)
         self.knowledge = knowledge               # KnowledgeBase | None (RAG)
@@ -877,6 +879,7 @@ class TurnEngine:
         full = ""
         first = True
         retries = 0
+        spoken = 0                                 # sentences actually fed to TTS
         try:
             while True:
                 evt = await sentence_queue.get()
@@ -993,6 +996,16 @@ class TurnEngine:
                         break
                     full += evt.text
                     await self._feed_tts(evt.text, pending)
+                    spoken += 1
+                    # Hard sentence cap: a deterministic backstop for models
+                    # that ignore "1-2 sentences" prompt rules (heard live: a
+                    # five-sentence identity ramble). The unspoken tail never
+                    # reaches TTS OR history — `full` holds only what was said.
+                    if self.max_reply_sentences and spoken >= self.max_reply_sentences:
+                        logger.info("reply.sentence_cap",
+                                    cap=self.max_reply_sentences)
+                        self.llm.cancel()
+                        break
             await pending.put(None)                # no more sentences
             await collector                        # wait for the audio to finish
         except asyncio.CancelledError:

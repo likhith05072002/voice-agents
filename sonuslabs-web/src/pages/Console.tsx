@@ -5,6 +5,8 @@ import { api, AgentConfig, AgentLite, ApiKeyInfo, CallRecord, LiveLine, WalletIn
 import { C, serif, mono, serif as SF, langLabel, LANGS } from "../theme";
 import { useIsMobile } from "../useIsMobile";
 import { useAuth } from "../auth";
+import { CLONE_SECONDS, MIN_CLONE_SECONDS, READ_SCRIPT,
+         startCloneRecording } from "../voiceCloneKit";
 
 type Tab = "agents" | "phone" | "calls" | "live" | "voice" | "analytics" | "billing" | "api";
 const TABS: [Tab, string][] = [["agents", "Agents"], ["phone", "Phone"], ["live", "Live"],
@@ -284,6 +286,14 @@ function AgentDetail({ id, onClose }: { id: string; onClose: () => void }) {
   const [phone, setPhone] = useState("");
   const [callMsg, setCallMsg] = useState("");
   const [copiedEmbed, setCopiedEmbed] = useState(false);
+  // Clone-my-voice (persistent: the clone becomes this agent's voice)
+  const [cloneOpen, setCloneOpen] = useState(false);
+  const [cloneState, setCloneState] =
+    useState<"idle" | "rec" | "uploading" | "done" | "error">("idle");
+  const [cloneSecs, setCloneSecs] = useState(0);
+  const [cloneMsg, setCloneMsg] = useState("");
+  const cloneStop = useRef<(() => void) | null>(null);
+  useEffect(() => () => { cloneStop.current?.(); }, []);
 
   useEffect(() => { api.agent(id).then(setA).catch(() => {}); api.voiceLab().then((r) => setVoices(r.voices)); }, [id]);
   if (!a) return <div style={{ color: C.darkMuted }}>Loading…</div>;
@@ -326,7 +336,86 @@ function AgentDetail({ id, onClose }: { id: string; onClose: () => void }) {
           <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 14 }}>
             <div><div style={dlbl}>VOICE</div>
               <select value={a.voice} onChange={(e) => upd({ voice: e.target.value })} style={dfield}>
-                {voices.map((v) => <option key={v} value={v}>{v}</option>)}</select></div>
+                {a.voice.startsWith("inworld:") &&
+                  <option value={a.voice}>🎙 your cloned voice</option>}
+                {voices.map((v) => <option key={v} value={v}>{v}</option>)}</select>
+              <div style={{ marginTop: 7, fontSize: 12.5 }}>
+                {!cloneOpen ? (
+                  <>
+                    <span onClick={() => { setCloneOpen(true); setCloneState("idle"); setCloneMsg(""); }}
+                      style={{ cursor: "pointer", color: C.accent, fontWeight: 600 }}>
+                      🎙 {a.voice.startsWith("inworld:") ? "Re-record my voice" : "Clone my voice"}
+                    </span>
+                    {a.voice.startsWith("inworld:") && (
+                      <span onClick={async () => {
+                        try { const r = await api.deleteAgentVoice(id); upd({ voice: r.voice }); }
+                        catch { /* already gone */ }
+                      }} style={{ cursor: "pointer", color: "#9A907C", marginLeft: 12 }}>
+                        remove clone
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <div style={{ background: C.dark, border: `1px solid ${C.darkLine}`,
+                    borderRadius: 10, padding: "10px 12px", marginTop: 2 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                      <span style={{ fontWeight: 700 }}>Clone my voice</span>
+                      <span onClick={() => { cloneStop.current?.(); setCloneOpen(false); }}
+                        style={{ cursor: "pointer", color: "#9A907C" }}>✕</span>
+                    </div>
+                    <div style={{ color: "#9A907C", lineHeight: 1.5, marginBottom: 8 }}>
+                      Read aloud in English ({CLONE_SECONDS}s) — your agent will speak
+                      every language in this voice:
+                      <div style={{ color: "#D8CFBC", marginTop: 4, fontStyle: "italic" }}>{READ_SCRIPT}</div>
+                      <div style={{ marginTop: 4 }}>Relax and keep going — a small slip is fine, restarting is not.</div>
+                    </div>
+                    <button onClick={async () => {
+                      if (cloneState === "rec") { cloneStop.current?.(); return; }
+                      setCloneMsg("");
+                      try {
+                        cloneStop.current = await startCloneRecording({
+                          onTick: setCloneSecs,
+                          onDone: async ({ b64, seconds }) => {
+                            cloneStop.current = null;
+                            if (seconds < MIN_CLONE_SECONDS) {
+                              setCloneState("error");
+                              setCloneMsg(`Too short — record at least ${MIN_CLONE_SECONDS} seconds.`);
+                              return;
+                            }
+                            setCloneState("uploading");
+                            try {
+                              const r = await api.cloneAgentVoice(id, b64);
+                              upd({ voice: r.voice });
+                              setCloneState("done");
+                              setCloneMsg("Done — this agent now speaks in your voice, on web and phone calls.");
+                            } catch (e: any) {
+                              setCloneState("error");
+                              setCloneMsg(String(e?.message || "Cloning failed — try again."));
+                            }
+                          },
+                        });
+                        setCloneState("rec");
+                      } catch { setCloneState("error"); setCloneMsg("Microphone permission denied."); }
+                    }} disabled={cloneState === "uploading"}
+                      style={{ width: "100%", padding: "9px 0", borderRadius: 9, border: "none",
+                        fontSize: 13, fontWeight: 700, cursor: "pointer", color: C.ink,
+                        background: cloneState === "rec" ? C.red : C.accent,
+                        opacity: cloneState === "uploading" ? 0.6 : 1 }}>
+                      {cloneState === "rec" ? `● Recording… ${cloneSecs}s (tap to finish)`
+                        : cloneState === "uploading" ? "Cloning your voice…"
+                        : cloneState === "done" ? "Re-record" : "● Start recording"}
+                    </button>
+                    {cloneMsg && (
+                      <div style={{ marginTop: 7, fontWeight: 600, lineHeight: 1.45,
+                        color: cloneState === "error" ? C.red : "#7BC89B" }}>{cloneMsg}</div>
+                    )}
+                    <div style={{ fontSize: 11, color: "#9A907C", marginTop: 7 }}>
+                      Clone only your own voice, with consent recorded here.
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
             <div><div style={dlbl}>EAGERNESS</div>
               <select value={a.eagerness || "balanced"} onChange={(e) => upd({ eagerness: e.target.value })} style={dfield}>
                 <option value="cautious">Cautious</option>

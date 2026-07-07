@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     sarvam_tts_model: str = "bulbul:v3"
     sarvam_tts_voice: str = "anushka"
 
+    # Inworld TTS — powers "Clone your voice" (English/Hindi) on the demo
+    # widget. Empty key = cloning endpoints return 503, Sarvam path untouched.
+    inworld_api_key: str = ""
+    inworld_tts_model: str = "inworld-tts-1.5-mini"
+
     # Sarvam LLM
     sarvam_llm_base_url: str = "https://api.sarvam.ai/v1"
     sarvam_llm_model: str = "sarvam-30b"

@@ -100,6 +100,7 @@ def build_engine(
         reprompt_text=agent.idle_reprompt_text,
         enable_language_switch=agent.enable_language_switch,
         enable_human_expression=agent.enable_human_expression,
+        max_reply_sentences=agent.max_reply_sentences,
         knowledge=_knowledge_for(agent),
         on_transcript=on_transcript,
         on_metrics=on_metrics,
