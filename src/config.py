@@ -151,6 +151,48 @@ class Settings(BaseSettings):
     agents_db_path: str = "agents.db"
     admin_api_key: str = ""
 
+    # ─── Accounts mode (Phase 4: auth + workspaces) ───
+    # Postgres DSN. When set, the app runs in ACCOUNTS mode: users/workspaces/
+    # sessions live in Postgres, agents+calls persist there too (tenant-scoped),
+    # and the console/create APIs require a signed-in user. Empty -> legacy
+    # single-trust SQLite mode (exactly the old behavior; prod-safe default).
+    database_url: str = ""
+    # Google OAuth (authorization-code flow). Redirect URI is
+    # {PUBLIC_URL|request origin}/auth/google/callback — whitelist it in the
+    # Google Cloud console.
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    # Signs the OAuth state (CSRF). Required in accounts mode. Generate:
+    # python -c "import secrets; print(secrets.token_urlsafe(48))"
+    session_secret: str = ""
+    # Base URL for the Google OAuth callback. Leave empty in prod (falls back to
+    # PUBLIC_URL = the real domain). Set to http://localhost:8001 in local dev
+    # WHEN PUBLIC_URL is pointed at a telephony tunnel, so sign-in keeps using
+    # the localhost callback that's registered in Google.
+    oauth_redirect_base: str = ""
+    # LOCAL DEV ONLY: /auth/dev-login signs in without Google. NEVER in prod.
+    dev_login_enabled: bool = False
+    # Platform operators: CSV of emails whose accounts see /admin (full
+    # cross-tenant monitoring). Everyone else gets 404s on /admin/*.
+    admin_emails: str = ""
+    # CSV of exact origins allowed to send credentialed requests. When set,
+    # CORS switches from "*" to this allowlist WITH credentials (browsers
+    # forbid wildcard+credentials). e.g. "http://localhost:5173"
+    cors_allow_origins: str = ""
+    # Agents callable via the public web demo WITHOUT auth (the landing orb).
+    public_demo_agents: str = "sonuslabs"
+
+    # ─── Billing (prepaid credits; INTEGER PAISE everywhere) ───
+    # Platform rate charged per minute of call time (300 = ₹3/min, the PAYG
+    # price). Billing is per second at rate/60, rounded up.
+    rate_paise_per_min: int = 300
+    # Free trial granted once at first sign-in, in minutes of talk time.
+    trial_minutes: int = 30
+    # Razorpay (top-ups). Empty -> "payments not configured"; dev top-up is
+    # available when DEV_LOGIN_ENABLED for local testing.
+    razorpay_key_id: str = ""
+    razorpay_key_secret: str = ""
+
     # ─── Limits (abuse / overload protection) ───
     max_concurrent_sessions: int = 100   # reject new media streams past this
     max_turns_per_min: int = 0           # per-call turn cap (0 = disabled)

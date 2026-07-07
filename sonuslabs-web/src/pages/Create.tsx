@@ -58,12 +58,17 @@ export function Create() {
     setStep(3);
     try {
       let body = { ...draft };
-      try { await api.createAgent(body); }
+      let made: AgentConfig;
+      try { made = await api.createAgent(body); }
       catch (e: any) {
-        if (e.message === "409") { body = { ...body, agent_id: body.agent_id + "-" + Date.now().toString(36).slice(-4) }; await api.createAgent(body); }
+        // Legacy-mode 409 fallback (accounts mode never 409s — the server
+        // suffixes collisions itself).
+        if (e.message === "409") { body = { ...body, agent_id: body.agent_id + "-" + Date.now().toString(36).slice(-4) }; made = await api.createAgent(body); }
         else throw e;
       }
-      setDraft(body); setStep(4);
+      // The SERVER owns the final agent_id (it may suffix for uniqueness) —
+      // step 4's talk orb must target what was actually created.
+      setDraft(made); setStep(4);
     } catch { setErr("Could not create the agent."); setStep(2); }
   };
 

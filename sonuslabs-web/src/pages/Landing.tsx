@@ -296,12 +296,19 @@ export function Landing() {
           <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
             <span style={{ fontFamily: serif, fontSize: 18, color: C.ink }}>SonusLabs</span>
             <span>· The receptionist who never sleeps.</span></div>
-          <div style={{ display: "flex", gap: 20 }}><span>Made in India 🇮🇳</span><span>hello@sonuslabs.ai</span></div>
+          <div style={{ display: "flex", gap: 18, flexWrap: "wrap", alignItems: "center" }}>
+            <span onClick={() => nav("/docs")} style={footLink}>Docs</span>
+            <span onClick={() => nav("/privacy")} style={footLink}>Privacy</span>
+            <span onClick={() => nav("/terms")} style={footLink}>Terms</span>
+            <span>Made in India 🇮🇳</span>
+          </div>
         </div>
       </div>
     </div>
   );
 }
+
+const footLink: React.CSSProperties = { cursor: "pointer", color: C.muted };
 
 const PLANS = [
   { name: "Pay as you go", price: "₹3", unit: "/min", tag: "Bring your own number (Telnyx / Twilio). No monthly fee.", featured: false,

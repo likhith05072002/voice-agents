@@ -1,10 +1,12 @@
 import { useNavigate } from "react-router-dom";
 import { C, serif } from "../theme";
 import { useIsMobile } from "../useIsMobile";
+import { useAuth } from "../auth";
 
 export function Nav() {
   const nav = useNavigate();
   const mob = useIsMobile();
+  const { user, enabled, loading } = useAuth();
   return (
     <div style={{ position: "sticky", top: 0, zIndex: 50, backdropFilter: "blur(10px)",
       background: "rgba(250,247,240,.82)", borderBottom: `1px solid ${C.line}` }}>
@@ -22,8 +24,25 @@ export function Nav() {
         {!mob && <>
           <span onClick={() => nav("/")} style={link}>Product</span>
           <a href="#pricing" style={{ ...link, textDecoration: "none" }}>Pricing</a>
+          <span onClick={() => nav("/docs")} style={link}>Docs</span>
           <span onClick={() => nav("/console")} style={link}>Console</span>
+          {enabled && !loading && !user &&
+            <span onClick={() => nav("/login")} style={link}>Sign in</span>}
         </>}
+        {user && (
+          <div onClick={() => nav("/console")} title={user.email}
+            style={{ width: 30, height: 30, borderRadius: "50%", overflow: "hidden",
+              background: C.accentSoft, border: `1px solid ${C.accentSoftBorder}`,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              cursor: "pointer", flexShrink: 0 }}>
+            {user.picture
+              ? <img src={user.picture} alt="" referrerPolicy="no-referrer"
+                  style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+              : <span style={{ fontSize: 13, fontWeight: 700, color: C.accentDeep }}>
+                  {(user.name || user.email)[0]?.toUpperCase()}
+                </span>}
+          </div>
+        )}
         <button onClick={() => nav(mob ? "/console" : "/create")} style={{ fontSize: mob ? 13 : 14,
           fontWeight: 600, color: "#fff", background: C.ink, border: "none", borderRadius: 11,
           padding: mob ? "8px 13px" : "10px 17px", cursor: "pointer", whiteSpace: "nowrap" }}>

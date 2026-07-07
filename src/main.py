@@ -64,6 +64,12 @@ except ImportError:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Accounts mode: bring up the Postgres pool + schema BEFORE hydrating,
+    # since the agent repo reads from it.
+    if settings.database_url:
+        from src.accounts import db as _accounts_db
+        await _accounts_db.connect(settings.database_url)
+        logger.info("accounts.connected")
     # Load persisted agents into the live store on boot.
     n = await _agent_manager.hydrate()
     logger.info("agents.hydrated", count=n, total=len(_agent_store))
@@ -87,23 +93,85 @@ async def lifespan(app: FastAPI):
     warm_task.cancel()
     samples_task.cancel()
     lang_samples_task.cancel()
+    if settings.database_url:
+        from src.accounts import db as _accounts_db
+        await _accounts_db.close()
 
 
-app = FastAPI(title="Voice Agent", version="0.8.0", lifespan=lifespan)
+# docs_url=None: /docs belongs to the SonusLabs developer portal (the React
+# SPA route) — FastAPI's default Swagger UI would shadow it on the single
+# origin. The OpenAPI autodocs are disabled entirely (the portal is curated).
+app = FastAPI(title="Voice Agent", version="0.8.0", lifespan=lifespan,
+              docs_url=None, redoc_url=None, openapi_url=None)
 
 # The SonusLabs frontend is a separate React app (different origin in dev and
 # prod) — without CORS every fetch dies in preflight.
+# Accounts mode uses an HttpOnly session cookie, and browsers FORBID
+# wildcard-origin + credentials — so when CORS_ALLOW_ORIGINS is set we switch
+# to an exact allowlist with credentials. Legacy mode keeps the old wildcard.
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],       # tighten to the sonuslabs.ai origins at deploy
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+_cors_origins = [o.strip().rstrip("/") for o in
+                 (settings.cors_allow_origins or "").split(",") if o.strip()]
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+# Accounts (Phase 4): Google sign-in + workspaces. Routes exist in both modes;
+# they 404/no-op cleanly when DATABASE_URL is unset (legacy mode).
+from src.accounts import auth as _auth  # noqa: E402
+from src.accounts import repo as _accounts_repo  # noqa: E402
+from src.accounts import billing as _billing  # noqa: E402
+from src.accounts import apikeys as _apikeys  # noqa: E402
+from src.accounts.billing_routes import router as _billing_router  # noqa: E402
+from src.accounts.admin_routes import router as _admin_router  # noqa: E402
+app.include_router(_auth.router)
+app.include_router(_billing_router)
+app.include_router(_admin_router)
+
+
+def _accounts_on() -> bool:
+    return bool(settings.database_url)
+
+
+# Agents callable from the public landing orb WITHOUT a session (the demo).
+_PUBLIC_DEMO_AGENTS = {s.strip() for s in
+                       (settings.public_demo_agents or "").split(",") if s.strip()}
 
 
 _sessions = SessionLimiter(settings.max_concurrent_sessions)
 _call_registry = CallRegistry()
+
+# Active BILLED calls per workspace (in-process, like SessionLimiter). Guards
+# the prepaid wallet against the concurrency race: N simultaneous calls each
+# capped at the full balance could spend N× it — so each new call's budget is
+# the balance divided across the calls already running.
+_billed_active: dict[str, int] = {}
+
+
+def _billed_start(ws: str) -> int:
+    n = _billed_active.get(ws, 0) + 1
+    _billed_active[ws] = n
+    return n
+
+
+def _billed_end(ws: str) -> None:
+    n = _billed_active.get(ws, 0) - 1
+    if n <= 0:
+        _billed_active.pop(ws, None)
+    else:
+        _billed_active[ws] = n
 
 
 def _build_agent_store() -> AgentStore:
@@ -121,13 +189,22 @@ def _build_agent_store() -> AgentStore:
 
 
 _agent_store = _build_agent_store()
-_call_store = SqliteCallStore(settings.calls_db_path) if settings.enable_persistence else None
+# Accounts mode: agents + calls persist in Postgres (tenant-scoped). Legacy:
+# the zero-infra SQLite stores. Postgres objects use the shared pool that
+# lifespan connects before hydrate, so building them at import is safe.
+if settings.database_url:
+    from src.tenancy.pg_repository import PostgresAgentRepository
+    from src.persistence.pg_store import PostgresCallStore
+    _call_store = PostgresCallStore() if settings.enable_persistence else None
+    _agent_repo = PostgresAgentRepository()
+else:
+    _call_store = SqliteCallStore(settings.calls_db_path) if settings.enable_persistence else None
+    _agent_repo = SqliteAgentRepository(settings.agents_db_path)
 _telnyx = TelnyxClient(settings.telnyx_api_key)
 _outbound_bucket = (
     TokenBucket(settings.max_outbound_per_min, settings.max_outbound_per_min / 60.0)
     if settings.max_outbound_per_min > 0 else None
 )
-_agent_repo = SqliteAgentRepository(settings.agents_db_path)
 _agent_manager = AgentManager(_agent_store, _agent_repo)
 
 
@@ -146,27 +223,94 @@ def _check_admin(request: Request):
     return None
 
 
+async def _console_ctx(request: Request) -> tuple[dict | None, str | None, JSONResponse | None]:
+    """Authorization context for console endpoints.
+
+    Accounts mode -> (user, workspace_id, None) or (None, None, error): a valid
+    session cookie AND an X-Workspace-Id the user is a member of are required.
+    Legacy mode -> (None, None, admin-check result): old shared-key behavior.
+    """
+    if not _accounts_on():
+        return None, None, _check_admin(request)
+    user = await _auth.current_user(request)
+    if user is None:
+        return None, None, JSONResponse({"error": "unauthorized"}, status_code=401)
+    ws, err = await _auth.request_workspace(request, user)
+    if err is not None:
+        return None, None, err
+    return user, ws, None
+
+
+def _ws_agents(ws: str) -> list[AgentConfig]:
+    return [a for a in _agent_manager.list() if a.workspace_id == ws]
+
+
+# Field-size ceilings for client-supplied agent config. Generous for real use,
+# hostile to abuse (accounts mode lets any signed-up user write these).
+_AGENT_LIMITS = {
+    "name": 120, "system_prompt": 24_000, "greeting_text": 1_000,
+    "idle_reprompt_text": 500, "webhook_url": 500, "industry": 120,
+}
+
+
+def _validate_agent_body(body: dict) -> str | None:
+    """Returns an error string, or None when the payload is acceptable."""
+    for field, cap in _AGENT_LIMITS.items():
+        v = body.get(field)
+        if isinstance(v, str) and len(v) > cap:
+            return f"{field} too long (max {cap} chars)"
+    docs = body.get("knowledge_docs")
+    if isinstance(docs, list):
+        if len(docs) > 60:
+            return "too many knowledge_docs (max 60)"
+        for d in docs:
+            if isinstance(d, str) and len(d) > 4_000:
+                return "a knowledge doc is too long (max 4000 chars)"
+    for lst, cap in (("phone_numbers", 20), ("tool_sets", 20)):
+        v = body.get(lst)
+        if isinstance(v, list) and len(v) > cap:
+            return f"too many {lst} (max {cap})"
+    return None
+
+
+def _unique_agent_id(base: str) -> str:
+    """Globally-unique slug: keeps the flat in-memory index / WS routing keys
+    while letting every workspace name their agent whatever they want."""
+    slug = re.sub(r"[^a-z0-9]+", "-", (base or "agent").lower()).strip("-")[:40] or "agent"
+    if _agent_store.get(slug) is None:
+        return slug
+    import secrets as _secrets
+    while True:
+        cand = f"{slug}-{_secrets.token_hex(2)}"
+        if _agent_store.get(cand) is None:
+            return cand
+
+
 # Platform/internal agents that are NOT a customer's workspace agents, so they
 # are hidden from the console listing (the fallback 'default' and the public
 # landing-demo assistant 'sonuslabs'). They still resolve for calls — only the
-# console list is filtered. Phase 4 (accounts) replaces this with tenant scoping.
+# console list is filtered. Accounts mode replaces this with tenant scoping.
 _CONSOLE_HIDDEN_AGENTS = {"default", "sonuslabs"}
 
 
 @app.get("/agents")
 async def list_agents(request: Request):
-    if (err := _check_admin(request)) is not None:
+    user, ws, err = await _console_ctx(request)
+    if err is not None:
         return err
+    if ws is not None:
+        return {"agents": [a.to_dict() for a in _ws_agents(ws)]}
     return {"agents": [a.to_dict() for a in _agent_manager.list()
                        if a.agent_id not in _CONSOLE_HIDDEN_AGENTS]}
 
 
 @app.get("/agents/{agent_id}")
 async def get_agent(agent_id: str, request: Request):
-    if (err := _check_admin(request)) is not None:
+    user, ws, err = await _console_ctx(request)
+    if err is not None:
         return err
     a = _agent_manager.get(agent_id)
-    if a is None:
+    if a is None or (ws is not None and a.workspace_id != ws):
         return JSONResponse({"error": "not found"}, status_code=404)
     return a.to_dict()
 
@@ -175,6 +319,11 @@ async def get_agent(agent_id: str, request: Request):
 async def onboard_research(request: Request):
     """Website URL (+ optional behaviour description) -> draft agent config.
     The frontend edits the draft, then creates it via POST /agents."""
+    if _accounts_on():
+        # Research burns LLM tokens — signed-in users only (no workspace needed:
+        # nothing is written yet).
+        if await _auth.current_user(request) is None:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
     body = await request.json()
     url = (body.get("website_url") or "").strip()
     if not url:
@@ -209,10 +358,19 @@ def _warm_agent_kb(agent: AgentConfig) -> None:
 
 @app.post("/agents")
 async def create_agent(request: Request):
-    if (err := _check_admin(request)) is not None:
+    user, ws, err = await _console_ctx(request)
+    if err is not None:
         return err
     body = await request.json()
+    body.pop("workspace_id", None)             # server-controlled, never client
+    if (verr := _validate_agent_body(body)) is not None:
+        return JSONResponse({"error": verr}, status_code=400)
     agent = AgentConfig.from_dict(body)
+    if ws is not None:
+        # Accounts mode: agent belongs to the caller's workspace, and the id is
+        # server-generated globally-unique (collisions suffixed, never 409).
+        agent.workspace_id = ws
+        agent.agent_id = _unique_agent_id(agent.agent_id or agent.name)
     if not agent.agent_id:
         return JSONResponse({"error": "agent_id required"}, status_code=400)
     try:
@@ -225,13 +383,18 @@ async def create_agent(request: Request):
 
 @app.patch("/agents/{agent_id}")
 async def update_agent(agent_id: str, request: Request):
-    if (err := _check_admin(request)) is not None:
+    user, ws, err = await _console_ctx(request)
+    if err is not None:
         return err
     existing = _agent_manager.get(agent_id)
-    if existing is None:
+    if existing is None or (ws is not None and existing.workspace_id != ws):
         return JSONResponse({"error": "not found"}, status_code=404)
     body = await request.json()
-    merged = {**existing.to_dict(), **body, "agent_id": agent_id}   # id is immutable
+    if (verr := _validate_agent_body(body)) is not None:
+        return JSONResponse({"error": verr}, status_code=400)
+    # id + owning workspace are immutable regardless of what the body says.
+    merged = {**existing.to_dict(), **body,
+              "agent_id": agent_id, "workspace_id": existing.workspace_id}
     await _agent_manager.update(AgentConfig.from_dict(merged))
     updated = _agent_manager.get(agent_id)
     _warm_agent_kb(updated)
@@ -240,8 +403,12 @@ async def update_agent(agent_id: str, request: Request):
 
 @app.delete("/agents/{agent_id}")
 async def delete_agent(agent_id: str, request: Request):
-    if (err := _check_admin(request)) is not None:
+    user, ws, err = await _console_ctx(request)
+    if err is not None:
         return err
+    existing = _agent_manager.get(agent_id)
+    if existing is None or (ws is not None and existing.workspace_id != ws):
+        return JSONResponse({"error": "not found"}, status_code=404)
     if agent_id == _agent_store.default_id:
         return JSONResponse({"error": "cannot delete the default agent"}, status_code=400)
     ok = await _agent_manager.delete(agent_id)
@@ -351,11 +518,18 @@ async def health():
 
 
 @app.get("/calls")
-async def list_calls(agent_id: str | None = None, limit: int = 50):
+async def list_calls(request: Request, agent_id: str | None = None, limit: int = 50):
     """Recent call records for analytics/QA (most recent first)."""
     if _call_store is None:
         return {"calls": []}
-    records = await _call_store.recent(agent_id=agent_id, limit=min(limit, 500))
+    if _accounts_on():
+        user, ws, err = await _console_ctx(request)
+        if err is not None:
+            return err
+        records = await _call_store.recent(agent_id=agent_id, limit=min(limit, 500),
+                                           workspace_id=ws)
+    else:
+        records = await _call_store.recent(agent_id=agent_id, limit=min(limit, 500))
     return {"calls": [r.to_row() for r in records]}
 
 
@@ -410,17 +584,144 @@ async def test_scenarios():
 
 
 @app.get("/live-transcript")
-async def live_transcript(since: float = 0.0):
+async def live_transcript(request: Request, since: float = 0.0):
     """Live feed of user/assistant lines across active calls — powers the
     dashboard's real-time view for 'Call My Phone' conversations."""
+    if _accounts_on():
+        user, ws, err = await _console_ctx(request)
+        if err is not None:
+            return err
+        mine = {a.agent_id for a in _ws_agents(ws)}
+        return {"lines": [x for x in _live_transcripts
+                          if x["t"] > since and x.get("agent_id") in mine],
+                "active": _sessions.active}
     return {"lines": [x for x in _live_transcripts if x["t"] > since],
             "active": _sessions.active}
 
 
+# ─── Phone numbers (pool model — see BUSINESS-PHONE-NUMBERS.md) ───
+
+@app.get("/numbers")
+async def list_numbers(request: Request):
+    """My workspace's numbers + what's claimable from the pool."""
+    user, ws, err = await _console_ctx(request)
+    if err is not None:
+        return err
+    if ws is None:
+        return JSONResponse({"error": "accounts mode required"}, status_code=404)
+    from src.accounts.db import pool as _pool
+    mine = await _pool().fetch(
+        """SELECT number, country, monthly_paise, agent_id,
+                  extract(epoch FROM assigned_at) AS assigned_at
+           FROM phone_numbers WHERE workspace_id = $1::uuid ORDER BY assigned_at""",
+        ws)
+    avail = await _pool().fetch(
+        """SELECT country, COUNT(*) AS n, MIN(monthly_paise) AS monthly_paise
+           FROM phone_numbers WHERE status = 'available' GROUP BY country""")
+    return {"numbers": [dict(r) for r in mine],
+            "available": [dict(r) for r in avail]}
+
+
+@app.post("/numbers/claim")
+async def claim_number(request: Request):
+    """Attach a pool number to one of my agents. Charges the first month's
+    rent from the wallet up front; inbound routing is live immediately."""
+    user, ws, err = await _console_ctx(request)
+    if err is not None:
+        return err
+    if ws is None:
+        return JSONResponse({"error": "accounts mode required"}, status_code=404)
+    body = await request.json()
+    agent_id = (body.get("agent_id") or "").strip()
+    country = (body.get("country") or "US").strip().upper()
+    agent = _agent_manager.get(agent_id)
+    if agent is None or agent.workspace_id != ws:
+        return JSONResponse({"error": "agent not found"}, status_code=404)
+    from src.accounts.db import pool as _pool
+    async with _pool().acquire() as con:
+        async with con.transaction():
+            # SKIP LOCKED: two simultaneous claims can't grab the same DID.
+            row = await con.fetchrow(
+                """SELECT number, monthly_paise FROM phone_numbers
+                   WHERE status = 'available' AND country = $1
+                   ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED""", country)
+            if row is None:
+                return JSONResponse(
+                    {"error": f"no {country} numbers in stock right now — "
+                              "we're adding more, check back soon"}, status_code=409)
+            owner = await _billing.workspace_owner(ws)
+            # con= : rent charge + DID assignment commit atomically (same tx).
+            bal = await _billing.charge_fixed(
+                owner, row["monthly_paise"], "number_rent",
+                ref=f"number:{row['number']}:first-month", con=con)
+            if bal is None:
+                return JSONResponse(
+                    {"error": "insufficient credits for the first month's rent — "
+                              "add credits in Billing"}, status_code=400)
+            await con.execute(
+                """UPDATE phone_numbers SET status = 'assigned',
+                   workspace_id = $2::uuid, agent_id = $3, assigned_at = now()
+                   WHERE number = $1""", row["number"], ws, agent_id)
+    # Attach the DID to the agent — by_phone routing is live from this moment.
+    merged = agent.to_dict()
+    if row["number"] not in merged["phone_numbers"]:
+        merged["phone_numbers"] = [*merged["phone_numbers"], row["number"]]
+    await _agent_manager.update(AgentConfig.from_dict(merged))
+    logger.info("number.claimed", number=row["number"], agent=agent_id, ws=ws)
+    return {"number": row["number"], "agent_id": agent_id,
+            "monthly_paise": row["monthly_paise"]}
+
+
+@app.post("/numbers/release")
+async def release_number(request: Request):
+    user, ws, err = await _console_ctx(request)
+    if err is not None:
+        return err
+    if ws is None:
+        return JSONResponse({"error": "accounts mode required"}, status_code=404)
+    body = await request.json()
+    number = (body.get("number") or "").strip()
+    from src.accounts.db import pool as _pool
+    row = await _pool().fetchrow(
+        """UPDATE phone_numbers SET status = 'available', workspace_id = NULL,
+           agent_id = NULL, assigned_at = NULL
+           WHERE number = $1 AND workspace_id = $2::uuid
+           RETURNING number""",
+        number, ws)
+    if row is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    # Detach from whichever workspace agent carries the DID (RETURNING sees the
+    # post-update row, so scan the few workspace agents instead).
+    for a in _ws_agents(ws):
+        if number in a.phone_numbers:
+            merged = a.to_dict()
+            merged["phone_numbers"] = [n for n in merged["phone_numbers"] if n != number]
+            await _agent_manager.update(AgentConfig.from_dict(merged))
+    logger.info("number.released", number=number, ws=ws)
+    return {"released": number}
+
+
+@app.get("/admin/live")
+async def admin_live(request: Request, since: float = 0.0):
+    """Operator monitor: active session count + the raw live-caption feed
+    across ALL tenants (in-process state, so it lives here not admin_routes)."""
+    user = await _auth.current_user(request)
+    if not _auth.is_admin(user):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return {"active": _sessions.active,
+            "lines": [x for x in _live_transcripts if x["t"] > since]}
+
+
 @app.get("/agents-lite")
-async def agents_lite():
-    """Public id+name list for the console (no secrets). Internal/platform
-    agents (default, sonuslabs) are hidden — see _CONSOLE_HIDDEN_AGENTS."""
+async def agents_lite(request: Request):
+    """id+name list for the console (no secrets). Accounts mode: the caller's
+    workspace agents. Legacy: everything minus _CONSOLE_HIDDEN_AGENTS."""
+    if _accounts_on():
+        user, ws, err = await _console_ctx(request)
+        if err is not None:
+            return err
+        return {"agents": [{"agent_id": a.agent_id, "name": a.name or a.agent_id}
+                           for a in _ws_agents(ws)]}
     return {"agents": [{"agent_id": a.agent_id, "name": a.name or a.agent_id}
                        for a in _agent_store.all()
                        if a.agent_id not in _CONSOLE_HIDDEN_AGENTS]}
@@ -552,21 +853,37 @@ async def test_audio(test_id: str):
 
 
 @app.get("/calls/search")
-async def search_calls(q: str, agent_id: str | None = None, limit: int = 50):
+async def search_calls(request: Request, q: str, agent_id: str | None = None,
+                       limit: int = 50):
     """Keyword search over call transcripts (QA: 'find calls mentioning refund')."""
     if _call_store is None:
         return {"calls": []}
-    records = await _call_store.search(q, agent_id=agent_id, limit=min(limit, 200))
+    if _accounts_on():
+        user, ws, err = await _console_ctx(request)
+        if err is not None:
+            return err
+        records = await _call_store.search(q, agent_id=agent_id,
+                                           limit=min(limit, 200), workspace_id=ws)
+    else:
+        records = await _call_store.search(q, agent_id=agent_id, limit=min(limit, 200))
     return {"calls": [r.to_row() for r in records]}
 
 
 @app.get("/analytics")
-async def analytics(agent_id: str | None = None, since: float | None = None):
+async def analytics(request: Request, agent_id: str | None = None,
+                    since: float | None = None):
     """Aggregate call stats (volume, avg duration, avg perceived latency,
     outcomes) for a business, optionally since a unix timestamp."""
     if _call_store is None:
         return {"total_calls": 0}
-    stats = await _call_store.stats(agent_id=agent_id, since=since)
+    if _accounts_on():
+        user, ws, err = await _console_ctx(request)
+        if err is not None:
+            return err
+        stats = await _call_store.stats(agent_id=agent_id, since=since,
+                                        workspace_id=ws)
+    else:
+        stats = await _call_store.stats(agent_id=agent_id, since=since)
     return stats.to_dict()
 
 
@@ -599,6 +916,14 @@ async def telnyx_webhook(request: Request):
             override = _test_agent_override.get("agent_id")
             agent = (_agent_store.get(override) if override else None) \
                 or _agent_store.resolve(to_number=to_number)
+            # Prepaid gate: a workspace agent whose wallet can't cover ~5s of
+            # talk doesn't answer at all (caller hears it ring out / disconnect
+            # instead of an answered-then-dead call).
+            if _accounts_on() and agent.workspace_id:
+                if await _billing.balance_seconds_for_workspace(agent.workspace_id) < 5:
+                    logger.warning("call.refused_no_credits", agent=agent.agent_id)
+                    asyncio.ensure_future(_telnyx.hangup(ccid))
+                    return JSONResponse({"status": "refused"})
             _call_registry.put(ccid, {"agent_id": agent.agent_id,
                                       "from": p.get("from", ""), "to": to_number},
                                now=time.monotonic())
@@ -694,6 +1019,17 @@ async def voice_sample(voice: str):
 @app.get("/voice-lab")
 async def voice_lab():
     return {"voices": VOICE_LAB_CANDIDATES}
+
+
+# ─── Standalone "Cocolevio Voice" demo (orb + paste-a-website onboarding) ───
+@app.get("/cocolevio")
+async def cocolevio_demo():
+    from fastapi.responses import FileResponse, HTMLResponse
+    from pathlib import Path as _P
+    f = _P(__file__).resolve().parent.parent / "web" / "cocolevio.html"
+    if not f.is_file():
+        return HTMLResponse("<p>cocolevio.html missing</p>", status_code=404)
+    return FileResponse(str(f), media_type="text/html")
 
 
 # ─── Non-verbal / emotion Phase-0 lab (listen + A/B; see scripts/nonverbal_lab.py) ───
@@ -809,8 +1145,40 @@ async def web_call(websocket: WebSocket):
         return
 
     stt = llm = tts = engine = engine_task = cap_task = None
+    billed_ws = None                     # workspace to bill on teardown
+    call_t0 = None
     try:
         agent = _agent_store.resolve(agent_id=websocket.query_params.get("agent_id"))
+        demo_call = True                 # unauth/public call -> time cap applies
+        credit_cap_s = 0
+        if _accounts_on() and agent.agent_id not in _PUBLIC_DEMO_AGENTS:
+            # Workspace agents are private: a session cookie rides on the WS
+            # handshake (browser), or ?api_key= for programmatic access.
+            ws_user = await _auth.current_user(websocket)
+            if ws_user is None:
+                qk = websocket.query_params.get("api_key", "")
+                if qk:
+                    ws_user = await _apikeys.user_for_key(qk)
+            allowed = (ws_user is not None and agent.workspace_id
+                       and await _accounts_repo.is_member(agent.workspace_id,
+                                                          ws_user["id"]))
+            if not allowed:
+                logger.warning("webcall.denied", agent=agent.agent_id)
+                await websocket.close(code=1008)   # policy violation
+                return
+            demo_call = False            # signed-in owner: no 3-min demo cap
+            # Prepaid metering: the wallet must cover the call. Refuse at ~0,
+            # and cap the call at what the balance can pay for — divided across
+            # this workspace's other active calls (see _billed_active).
+            concurrent = _billed_start(agent.workspace_id)
+            billed_ws = agent.workspace_id
+            credit_cap_s = (await _billing.balance_seconds_for_workspace(
+                agent.workspace_id)) // concurrent
+            if credit_cap_s < 5:
+                await websocket.send_text(json.dumps(
+                    {"type": "call_end", "reason": "no_credits"}))
+                await websocket.close(code=1000)
+                return
         logger.info("webcall.started", agent=agent.agent_id)
         warm_india_rates()               # rates hot before the caller asks
 
@@ -870,7 +1238,11 @@ async def web_call(websocket: WebSocket):
         # cannot talk all day or bypass it by editing the client. Tell the
         # browser the limit up front so its countdown matches; a watchdog ends
         # the call at the cap with a distinguishable 'call_end' frame.
-        cap_s = settings.web_call_max_seconds
+        # Demo calls: the marketing time cap. Billed calls: the balance-derived
+        # cap — the same watchdog, so nobody talks past what the wallet covers.
+        cap_s = settings.web_call_max_seconds if demo_call else credit_cap_s
+        cap_reason = "time_limit" if demo_call else "credits_exhausted"
+        call_t0 = time.monotonic()
         if cap_s and cap_s > 0:
             await websocket.send_text(json.dumps({"type": "call_start", "max_seconds": cap_s}))
 
@@ -879,10 +1251,11 @@ async def web_call(websocket: WebSocket):
                     await asyncio.sleep(cap_s)
                 except asyncio.CancelledError:
                     return
-                logger.info("webcall.time_limit", agent=agent.agent_id, seconds=cap_s)
+                logger.info("webcall.time_limit", agent=agent.agent_id,
+                            seconds=cap_s, reason=cap_reason)
                 try:
                     await websocket.send_text(
-                        json.dumps({"type": "call_end", "reason": "time_limit"}))
+                        json.dumps({"type": "call_end", "reason": cap_reason}))
                 except Exception:  # noqa: BLE001
                     pass
                 try:
@@ -928,6 +1301,9 @@ async def web_call(websocket: WebSocket):
     except Exception as e:  # noqa: BLE001
         logger.error("webcall.error", error=str(e))
     finally:
+        # Bill the talk time, not our teardown time: snapshot the clock BEFORE
+        # engine/client closes (those awaits can add seconds).
+        call_seconds = (time.monotonic() - call_t0) if call_t0 is not None else 0.0
         if cap_task is not None:
             cap_task.cancel()
             try:
@@ -946,6 +1322,13 @@ async def web_call(websocket: WebSocket):
                     await client.close()
                 except Exception:  # noqa: BLE001
                     pass
+        if billed_ws:
+            _billed_end(billed_ws)
+            if call_seconds > 0:
+                # Bill the seconds actually used (never raises — billing.py).
+                await _billing.charge_workspace_usage(
+                    billed_ws, call_seconds,
+                    ref=f"web:{agent.agent_id}:{int(time.time())}")
         _sessions.release()
         logger.info("webcall.ended")
 
@@ -962,6 +1345,8 @@ async def media_stream(websocket: WebSocket):
         return
 
     stt = llm = tts = recorder = agent = warmup_task = engine = None
+    credit_cap_task = None
+    billed_phone_ws = None
     resampler = Resampler()
     try:
         # Wait for the stream-start frame; it carries the call id.
@@ -1014,6 +1399,36 @@ async def media_stream(websocket: WebSocket):
             from_number=info.get("from", ""), to_number=info.get("to", ""),
             started_at=time.time(), clock=time.monotonic,
         )
+        if agent.workspace_id:
+            # Tenant tag: the Postgres store lifts this into an indexed column
+            # so /calls and /analytics can filter per workspace.
+            recorder.record.metadata["workspace_id"] = agent.workspace_id
+        if _accounts_on() and agent.workspace_id:
+            # Prepaid cap: end the phone call when the wallet runs out (same
+            # principle as the web-call watchdog — enforcement, not trust).
+            # Budget divides across the workspace's other active billed calls.
+            billed_phone_ws = agent.workspace_id
+            _n = _billed_start(billed_phone_ws)
+            credit_s = (await _billing.balance_seconds_for_workspace(
+                agent.workspace_id)) // _n
+
+            async def _credit_cap(cc=ccid, limit=max(5, credit_s)) -> None:
+                try:
+                    await asyncio.sleep(limit)
+                except asyncio.CancelledError:
+                    return
+                logger.info("call.credits_exhausted", agent=agent.agent_id,
+                            seconds=limit)
+                try:
+                    await _telnyx.hangup(cc)
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    await websocket.close(code=1000)
+                except Exception:  # noqa: BLE001
+                    pass
+
+            credit_cap_task = asyncio.create_task(_credit_cap())
 
         eag = agent_eagerness(agent)
         turn_bucket = (
@@ -1052,13 +1467,18 @@ async def media_stream(websocket: WebSocket):
             filler = FillerPlayer(agent.language)
             filler.load()
 
+        # The peer number to show in Live/Logs: for outbound it's who we dialed
+        # (info["to"]); for inbound it's the caller (info["from"]).
+        _peer = info.get("to") or info.get("from") or ""
+
         def transcript_sink(role: str, text: str) -> None:
             logger.info("transcript", agent=agent.agent_id, role=role,
                         text=text[:200].encode("ascii", "replace").decode())
             if recorder is not None:
                 recorder.transcript(role, text)
             _live_transcripts.append(
-                {"t": time.time(), "call_id": ccid, "role": role, "text": text})
+                {"t": time.time(), "call_id": ccid, "agent_id": agent.agent_id,
+                 "number": _peer, "role": role, "text": text})
 
         def metrics_sink(breakdown: dict) -> None:
             if recorder is not None:
@@ -1241,6 +1661,14 @@ async def media_stream(websocket: WebSocket):
                     await post_event(agent.webhook_url,
                                      {"event": "call.completed", **record.to_row()},
                                      secret=agent.webhook_secret)
+                # Prepaid metering: bill the phone call's seconds to the
+                # owning workspace's wallet (accounts mode; platform/demo
+                # agents have no workspace and are not billed).
+                if (_accounts_on() and agent is not None and agent.workspace_id
+                        and record.duration_s):
+                    await _billing.charge_workspace_usage(
+                        agent.workspace_id, record.duration_s,
+                        ref=f"call:{record.call_id or 'unknown'}")
             except Exception as e:  # noqa: BLE001 — teardown must never crash
                 logger.error("call_teardown_failed", error=str(e))
         if engine is not None and engine.tap:
@@ -1254,6 +1682,10 @@ async def media_stream(websocket: WebSocket):
                 logger.info("pump.tap_saved", bytes=len(engine.tap))
             except Exception as e:  # noqa: BLE001
                 logger.warning("pump.tap_save_failed", error=str(e))
+        if billed_phone_ws:
+            _billed_end(billed_phone_ws)
+        if credit_cap_task is not None:
+            credit_cap_task.cancel()
         if warmup_task is not None:
             warmup_task.cancel()
         if stt is not None:

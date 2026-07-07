@@ -11,3 +11,6 @@ uvloop==0.21.0; sys_platform != "win32"
 # Python 3.13 removed the stdlib `audioop` (PEP 594); this backport restores it.
 # The whole telephony path (mulaw encode/decode, ratecv, rms) imports audioop.
 audioop-lts==0.2.1; python_version >= "3.13"
+# Accounts mode (DATABASE_URL set): Postgres pool + OAuth state signing.
+asyncpg==0.30.0
+itsdangerous==2.2.0

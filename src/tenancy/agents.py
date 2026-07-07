@@ -26,8 +26,17 @@ def normalize_number(number: str) -> str:
 
 @dataclass
 class AgentConfig:
-    agent_id: str
+    # Default "" so from_dict() tolerates a body without an id — the create
+    # endpoint generates the real, globally-unique id server-side (the API
+    # contract: clients don't pick ids). Legacy create still rejects empty.
+    agent_id: str = ""
     name: str = ""
+
+    # Owning workspace (accounts mode). Server-controlled: set at create from
+    # the authenticated workspace, never from a client PATCH body. "" = platform
+    # agent (default fallback, public landing demo). from_dict() ignores unknown
+    # keys, so pre-accounts stored blobs load fine with the default.
+    workspace_id: str = ""
 
     # Voice & language
     language: str = "te-IN"

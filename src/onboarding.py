@@ -15,7 +15,10 @@ Research = two sources merged:
 
 from __future__ import annotations
 
+import ipaddress
 import re
+import socket
+from urllib.parse import urlparse
 
 import httpx
 import structlog
@@ -46,14 +49,43 @@ def _strip_html(html: str, cap: int = 6000) -> str:
     return text[:cap]
 
 
+def _assert_public_host(url: str) -> None:
+    """SSRF guard: the research fetcher must only reach the public internet.
+
+    Any signed-up user controls this URL — without the check they could make
+    the server probe itself (127.0.0.1:<port>), the home LAN the Pi sits on
+    (192.168.x.x routers, printers), or cloud metadata endpoints. Every
+    resolved address must be public."""
+    host = urlparse(url).hostname or ""
+    if not host:
+        raise ValueError("invalid URL")
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        raise ValueError("could not resolve that website") from None
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            raise ValueError("that address is not reachable from here")
+
+
 async def _fetch_site(url: str) -> str:
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
-    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True,
+    # Follow redirects MANUALLY so every hop is re-validated — a public URL
+    # 302ing to http://192.168.1.1/ must die at the redirect, not get fetched.
+    async with httpx.AsyncClient(timeout=15.0, follow_redirects=False,
                                  headers={"User-Agent": "Mozilla/5.0 (SonusLabs onboarding)"}) as c:
-        r = await c.get(url)
-        r.raise_for_status()
-        return _strip_html(r.text)
+        for _ in range(4):
+            _assert_public_host(url)
+            r = await c.get(url)
+            if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("location"):
+                url = str(httpx.URL(url).join(r.headers["location"]))
+                continue
+            r.raise_for_status()
+            return _strip_html(r.text)
+        raise ValueError("too many redirects")
 
 
 async def _search_summary(company_hint: str, openrouter_key: str) -> str:
@@ -83,6 +115,15 @@ async def research_website(*, url: str, description: str, complete_json,
 
     ``complete_json(messages) -> dict`` is the LLM callable (injected so this
     module stays testable without network)."""
+    # Reject internal/localhost targets up front — otherwise a blocked fetch
+    # falls through to the search step and hallucinates an "agent" from the
+    # URL string. Normalize scheme first so the host check sees the real host.
+    probe = url if url.startswith(("http://", "https://")) else "https://" + url
+    try:
+        _assert_public_host(probe)
+    except ValueError:
+        raise ValueError("please enter a public website address") from None
+
     site_text = ""
     try:
         site_text = await _fetch_site(url)

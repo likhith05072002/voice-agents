@@ -99,11 +99,15 @@ export const CallPanel = memo(function CallPanel({ agentId, subtitle, orbSize = 
         </div>
       )}
 
-      {endedReason === "time_limit" && status === "idle" && (
+      {endedReason !== null && status === "idle" && (
         <div style={{ textAlign: "center", background: "#FBE8E2", border: "1px solid #F1C9BD",
           color: "#B24A2E", borderRadius: 10, padding: "8px 12px", fontSize: 12.5, fontWeight: 600,
           margin: "0 2px 10px" }}>
-          ⏱ Demo time's up — 3-minute limit. Tap the orb to talk again.
+          {endedReason === "time_limit"
+            ? "⏱ Demo time's up — 3-minute limit. Tap the orb to talk again."
+            : endedReason === "no_credits"
+              ? "💳 Out of credits — add credits in the Billing tab to keep talking."
+              : "💳 Credits ran out mid-call — top up in the Billing tab to continue."}
         </div>
       )}
       <div ref={capRef} style={{ minHeight: 132, maxHeight: 210, overflowY: "auto",

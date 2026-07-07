@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Cocolevio Voice</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  :root{--bg:#0b0d10;--card:#14171c;--line:#242a31;--txt:#eef1f4;--mut:#8b94a0;--acc:#38bdf8;--acc2:#22d3ee}
+  html,body{height:100%}
+  body{background:radial-gradient(1200px 700px at 50% -10%,#12212b 0%,var(--bg) 55%);color:var(--txt);
+    font-family:'Hanken Grotesk',system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased;
+    min-height:100%;display:flex;flex-direction:column}
+  .top{display:flex;align-items:center;gap:11px;padding:20px 24px}
+  .logo{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,var(--acc),var(--acc2));
+    display:flex;align-items:center;justify-content:center;box-shadow:0 0 22px -4px var(--acc)}
+  .logo b{color:#06232e;font-size:16px}
+  .brand{font-size:19px;font-weight:800;letter-spacing:.2px}
+  .brand span{color:var(--mut);font-weight:600}
+  .wrap{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:10px 20px 40px;text-align:center}
+  .hero h1{font-size:34px;font-weight:800;letter-spacing:-.5px;line-height:1.1;margin-bottom:10px}
+  .hero p{color:var(--mut);font-size:15.5px;max-width:440px;margin:0 auto 26px;line-height:1.5}
+  /* input card */
+  .card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:8px;display:flex;gap:8px;
+    max-width:520px;width:100%;margin:0 auto;box-shadow:0 30px 60px -30px #000}
+  .card input{flex:1;background:transparent;border:none;outline:none;color:var(--txt);font-size:15px;padding:12px 14px;font-family:inherit}
+  .card input::placeholder{color:#5c6470}
+  .btn{border:none;border-radius:12px;padding:12px 20px;font-size:14.5px;font-weight:700;cursor:pointer;
+    background:linear-gradient(135deg,var(--acc),var(--acc2));color:#06232e;white-space:nowrap;font-family:inherit}
+  .btn:disabled{opacity:.5;cursor:default}
+  .skip{margin-top:16px;font-size:13.5px;color:var(--mut)}
+  .skip a{color:var(--acc);font-weight:600;cursor:pointer;text-decoration:none}
+  .err{color:#fb7185;font-size:13.5px;margin-top:12px;min-height:16px}
+  /* researching */
+  .steps{display:flex;flex-direction:column;gap:9px;max-width:360px;margin:20px auto 0;text-align:left}
+  .step{display:flex;align-items:center;gap:11px;background:var(--card);border:1px solid var(--line);
+    border-radius:12px;padding:11px 15px;font-size:14px;color:#cfd6dd;animation:up .35s}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--acc);box-shadow:0 0 10px var(--acc)}
+  .spin{width:13px;height:13px;border:2px solid var(--line);border-top-color:var(--acc);border-radius:50%;animation:spin .7s linear infinite}
+  /* call */
+  .orbwrap{position:relative;width:260px;height:260px;margin:6px auto 4px;cursor:pointer}
+  .orbwrap canvas{width:260px;height:260px;display:block}
+  .orbcenter{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none}
+  .orbcenter b{font-size:14px;font-weight:800;letter-spacing:.3px;text-shadow:0 2px 12px #000}
+  .agentname{font-size:20px;font-weight:800;margin-bottom:2px}
+  .status{font-family:ui-monospace,monospace;font-size:12px;color:var(--mut);display:inline-flex;align-items:center;gap:7px;margin-bottom:10px}
+  .status .s{width:8px;height:8px;border-radius:50%}
+  .caps{max-width:520px;margin:16px auto 0;display:flex;flex-direction:column;gap:9px;min-height:60px;width:100%}
+  .cap{max-width:82%;padding:10px 14px;border-radius:15px;font-size:14px;line-height:1.4}
+  .cap.user{align-self:flex-end;background:linear-gradient(135deg,var(--acc),var(--acc2));color:#06232e;border-bottom-right-radius:5px;font-weight:600}
+  .cap.assistant{align-self:flex-start;background:#1b2028;border:1px solid var(--line);border-bottom-left-radius:5px}
+  .hint{color:#5c6470;font-size:12.5px;margin-top:14px}
+  .phonebox{max-width:420px;margin:22px auto 0;background:var(--card);border:1px solid var(--line);
+    border-radius:16px;padding:16px 16px 14px}
+  .phonebox-t{font-size:13.5px;font-weight:700;color:#cfd6dd;margin-bottom:11px}
+  .phonebox-row{display:flex;gap:8px}
+  .phonebox input{flex:1;background:#0e1116;border:1px solid var(--line);border-radius:11px;
+    padding:12px 13px;color:var(--txt);font-size:15px;outline:none;font-family:inherit}
+  .phonebox input::placeholder{color:#5c6470}
+  .phonemsg{font-size:12.5px;margin-top:10px;min-height:16px;color:var(--mut)}
+  .phonemsg.ok{color:#34d399}
+  .phonemsg.err{color:#fb7185}
+  @keyframes up{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .hidden{display:none}
+  .foot{text-align:center;color:#4b535d;font-size:12px;padding:16px}
+</style>
+</head>
+<body>
+  <div class="top">
+    <div class="logo"><b>C</b></div>
+    <div class="brand">Cocolevio <span>Voice</span></div>
+  </div>
+
+  <div class="wrap">
+    <!-- STATE 1: enter website -->
+    <div id="intro" class="hero">
+      <h1>Give it a website.<br>Talk to the business.</h1>
+      <p>Paste any company's website — Cocolevio Voice reads it, learns the business, and becomes their AI receptionist in seconds. Then just talk.</p>
+      <div class="card">
+        <input id="url" type="text" placeholder="https://yourbusiness.com" autocomplete="off" spellcheck="false" />
+        <button id="go" class="btn">Build the voice agent →</button>
+      </div>
+      <div class="err" id="err"></div>
+      <div class="skip">or <a id="justtalk">just talk to the assistant →</a></div>
+    </div>
+
+    <!-- STATE 2: researching -->
+    <div id="researching" class="hero hidden">
+      <h1>Reading the website…</h1>
+      <p>Learning the business and building its voice agent.</p>
+      <div class="steps" id="steps"></div>
+    </div>
+
+    <!-- STATE 3: call -->
+    <div id="call" class="hidden">
+      <div class="agentname" id="agentName">Cocolevio Voice</div>
+      <div class="status" id="status"><span class="s" style="background:#5c6470"></span><span id="statusText">idle</span></div>
+      <div class="orbwrap" id="orbwrap">
+        <canvas id="orb"></canvas>
+        <div class="orbcenter"><b id="orbLabel">Tap to talk</b></div>
+      </div>
+      <div class="caps" id="caps"></div>
+      <div class="hint" id="hint">Tap the orb and say hello. Reply in हिंदी and it follows.</div>
+
+      <!-- call a real phone: the agent dials out over Telnyx -->
+      <div class="phonebox">
+        <div class="phonebox-t">📞 Have it call a phone</div>
+        <div class="phonebox-row">
+          <input id="phone" type="tel" placeholder="+91 98765 43210" autocomplete="off" />
+          <button id="dial" class="btn">Call now</button>
+        </div>
+        <div class="phonemsg" id="phonemsg"></div>
+      </div>
+    </div>
+  </div>
+  <div class="foot">Powered by Cocolevio Voice</div>
+
+<script>
+const API = location.origin;
+const WS  = API.replace(/^http/, 'ws');
+const $ = id => document.getElementById(id);
+const show = id => { for (const s of ['intro','researching','call']) $(s).classList.toggle('hidden', s !== id); };
+
+// ---------- research + create ----------
+const RESEARCH_LINES = ["Reading the website…","Learning what they do…","Writing the persona…","Building the knowledge…","Almost ready…"];
+async function buildAgent(url){
+  show('researching'); $('steps').innerHTML='';
+  let i=0; const tick=()=>{ if(i<RESEARCH_LINES.length){ const d=document.createElement('div'); d.className='step';
+    d.innerHTML='<span class="dot"></span>'+RESEARCH_LINES[i]; $('steps').appendChild(d); i++; } };
+  tick(); const t=setInterval(tick,2600);
+  try{
+    const r = await fetch(API+'/onboard/research',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({website_url:url, description:''})});
+    if(!r.ok) throw new Error('research');
+    let draft = await r.json();
+    // create the agent (retry with a unique id on collision)
+    let cr = await fetch(API+'/agents',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(draft)});
+    if(cr.status===409){ draft.agent_id = draft.agent_id+'-'+Date.now().toString(36).slice(-4);
+      cr = await fetch(API+'/agents',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(draft)}); }
+    if(!cr.ok) throw new Error('create');
+    const made = await cr.json();
+    clearInterval(t);
+    openCall(made.agent_id, made.name || draft.name || 'Your assistant');
+  }catch(e){ clearInterval(t); show('intro'); $('err').textContent = "Couldn't read that site — check the URL and try again."; }
+}
+
+// ---------- call screen ----------
+let level=0, active=false;
+function openCall(agentId, name){
+  window._agentId = agentId;
+  $('agentName').textContent = name;
+  show('call'); startOrb(); setStatus('idle');
+}
+function setStatus(s){ const map={idle:['#5c6470','idle'],connecting:['#f59e0b','connecting…'],live:['#22d3ee','live']};
+  const [c,t]=map[s]||map.idle; $('status').firstElementChild.style.background=c; $('statusText').textContent=t; }
+function addCap(role,text){ const d=document.createElement('div'); d.className='cap '+role; d.textContent=text;
+  $('caps').appendChild(d); $('caps').scrollTop=1e9; }
+
+// ---------- orb ----------
+function startOrb(){
+  const cv=$('orb'), dpr=devicePixelRatio||1, S=260; cv.width=S*dpr; cv.height=S*dpr;
+  const g=cv.getContext('2d'); g.scale(dpr,dpr); let ph=0, lv=0;
+  (function draw(){ lv += (level-lv)*0.25; const cx=S/2,cy=S/2; g.clearRect(0,0,S,S); ph+=0.02;
+    const br= active?0:Math.sin(ph)*0.02+0.02, e=Math.min(1,lv*2.4), base=S*0.30;
+    for(let i=3;i>=1;i--){ const r=base+i*(S*0.055)*(1+e*0.8)+br*S; g.beginPath(); g.arc(cx,cy,r,0,7);
+      g.fillStyle='rgba(56,189,248,'+((0.05+e*0.07)/i)+')'; g.fill(); }
+    if(active){ g.beginPath(); const seg=72; for(let i=0;i<=seg;i++){ const a=i/seg*Math.PI*2,
+      w=Math.sin(a*6+ph*3)*e*S*0.05, r=base+S*0.05+w, x=cx+Math.cos(a)*r, y=cy+Math.sin(a)*r; i?g.lineTo(x,y):g.moveTo(x,y);}
+      g.closePath(); g.strokeStyle='rgba(34,211,238,'+(0.5+e*0.4)+')'; g.lineWidth=2; g.stroke(); }
+    const cr=base*(1+br+e*0.10), gr=g.createRadialGradient(cx,cy-cr*0.3,cr*0.2,cx,cy,cr);
+    gr.addColorStop(0,'#1b2733'); gr.addColorStop(1,'#0e141b'); g.beginPath(); g.arc(cx,cy,cr,0,7); g.fillStyle=gr; g.fill();
+    g.beginPath(); g.arc(cx,cy,cr*0.34,0,7); g.fillStyle='#38bdf8'; g.fill();
+    g.beginPath(); g.arc(cx,cy,cr*0.34+3+e*5,0,7); g.fillStyle='rgba(56,189,248,'+(0.3+e*0.3)+')'; g.fill();
+    requestAnimationFrame(draw); })();
+}
+
+// ---------- web-call audio (proven client: box-average mic downsample, sample-count playback) ----------
+let ws=null, ctx=null, stream=null, proc=null;
+$('orbwrap').onclick = () => ws ? stopCall() : startCall();
+async function startCall(){
+  setStatus('connecting'); $('caps').innerHTML=''; $('orbLabel').textContent='…';
+  let ms; try{ ms=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});}
+  catch(e){ setStatus('idle'); $('orbLabel').textContent='Tap to talk'; alert('Microphone permission needed.'); return; }
+  stream=ms; ctx=new (window.AudioContext||window.webkitAudioContext)();
+  ws=new WebSocket(WS+'/web-call?agent_id='+encodeURIComponent(window._agentId)); ws.binaryType='arraybuffer';
+  ws.onopen=()=>{ setStatus('live'); active=true; $('orbLabel').textContent='Listening'; };
+  ws.onclose=()=>{ if(ws) stopCall(); }; ws.onerror=()=>{ if(ws) stopCall(); };
+  let ps=0, pe=0;
+  ws.onmessage=e=>{
+    if(typeof e.data==='string'){ const m=JSON.parse(e.data);
+      if(m.type) return; if(m.text&&m.text.trim()) addCap(m.role, m.text); return; }
+    const i16=new Int16Array(e.data); const buf=ctx.createBuffer(1,i16.length,16000); const ch=buf.getChannelData(0);
+    let pk=0; for(let i=0;i<i16.length;i++){ const s=i16[i]/32768; ch[i]=s; const a=s<0?-s:s; if(a>pk)pk=a; }
+    const src=ctx.createBufferSource(); src.buffer=buf; src.connect(ctx.destination);
+    let t=pe+ps/16000; if(t<ctx.currentTime+0.02){ pe=ctx.currentTime+0.25; ps=0; t=pe; } src.start(t); ps+=i16.length; level=pk;
+  };
+  const source=ctx.createMediaStreamSource(ms); const node=ctx.createScriptProcessor(4096,1,1); proc=node;
+  const ratio=ctx.sampleRate/16000;
+  node.onaudioprocess=ev=>{ if(!ws||ws.readyState!==1) return; const inp=ev.inputBuffer.getChannelData(0);
+    const out=new Int16Array(Math.floor(inp.length/ratio)); let pk=0;
+    for(let i=0;i<out.length;i++){ const a=Math.floor(i*ratio),b=Math.floor((i+1)*ratio); let sum=0;
+      for(let k=a;k<b;k++) sum+=inp[k]; const v=sum/Math.max(1,b-a); out[i]=Math.max(-32768,Math.min(32767,v*32768));
+      const av=v<0?-v:v; if(av>pk)pk=av; }
+    ws.send(out.buffer); if(pk>0.06) level=pk; };
+  source.connect(node); const mute=ctx.createGain(); mute.gain.value=0; node.connect(mute); mute.connect(ctx.destination);
+}
+function stopCall(){ const s=ws; ws=null; if(s&&s.readyState<=1)s.close(); proc&&proc.disconnect(); proc=null;
+  stream&&stream.getTracks().forEach(t=>t.stop()); stream=null; ctx&&ctx.close().catch(()=>{}); ctx=null;
+  active=false; level=0; setStatus('idle'); $('orbLabel').textContent='Tap to talk'; }
+
+// ---------- wire up ----------
+$('go').onclick=()=>{ const u=$('url').value.trim(); $('err').textContent='';
+  if(!u){ $('err').textContent='Enter a website URL'; return; } buildAgent(u); };
+$('url').addEventListener('keydown',e=>{ if(e.key==='Enter') $('go').click(); });
+$('justtalk').onclick=()=> openCall('cvoice','Cocolevio Voice');
+
+// ---------- outbound: the agent calls a real phone (Telnyx) ----------
+$('dial').onclick = async () => {
+  const to = $('phone').value.trim();
+  const msg = $('phonemsg');
+  msg.className = 'phonemsg';
+  if (!/^\+?[0-9][0-9\s\-]{6,}$/.test(to)) { msg.className='phonemsg err'; msg.textContent='Enter a number with country code, e.g. +91…'; return; }
+  const num = '+' + to.replace(/[^0-9]/g, '');
+  const agent = window._agentId || 'cvoice';
+  msg.textContent = 'Dialing ' + num + '…';
+  try {
+    const r = await fetch(API + '/outbound', { method:'POST', headers:{'content-type':'application/json'},
+      body: JSON.stringify({ to: num, agent_id: agent }) });
+    const d = await r.json().catch(()=>({}));
+    if (r.ok) { msg.className='phonemsg ok'; msg.textContent = '✓ Ringing ' + num + ' — pick up and talk to the assistant.'; }
+    else { msg.className='phonemsg err'; msg.textContent = d.error || ('Call failed (' + r.status + ')'); }
+  } catch(e) { msg.className='phonemsg err'; msg.textContent = 'Could not place the call.'; }
+};
+$('phone').addEventListener('keydown', e => { if (e.key === 'Enter') $('dial').click(); });
+</script>
+</body>
+</html>

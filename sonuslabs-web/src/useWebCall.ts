@@ -19,7 +19,8 @@ export function useWebCall() {
   const [status, setStatus] = useState<CallStatus>("idle");
   const [captions, setCaptions] = useState<Caption[]>([]);
   const [remaining, setRemaining] = useState<number | null>(null); // seconds left, null = uncapped
-  const [endedReason, setEndedReason] = useState<"time_limit" | null>(null);
+  const [endedReason, setEndedReason] =
+    useState<"time_limit" | "no_credits" | "credits_exhausted" | null>(null);
   // hot-path outputs — read these in rAF loops, never via React state
   const levelRef = useRef(0);
   const speakingRef = useRef<"agent" | "user" | null>(null);
@@ -80,7 +81,9 @@ export function useWebCall() {
           return;
         }
         if (m.type === "call_end") {
-          setEndedReason(m.reason === "time_limit" ? "time_limit" : null);
+          setEndedReason(
+            m.reason === "time_limit" || m.reason === "no_credits" ||
+            m.reason === "credits_exhausted" ? m.reason : null);
           stop();
           return;
         }
