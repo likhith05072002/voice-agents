@@ -1,7 +1,7 @@
 // Sign-in: one card, one button. The Google button is a full-page navigation
 // (NOT fetch) — the OAuth consent redirect chain has to own the tab. After the
 // callback the backend 303s back to ?next.
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "../auth";
@@ -22,7 +22,6 @@ export function Login() {
   const nav = useNavigate();
   const loc = useLocation();
   const { user, loading } = useAuth();
-  const [devEmail, setDevEmail] = useState("");
   const next = new URLSearchParams(loc.search).get("next") || "/console";
 
   // Already signed in (e.g. back-button onto /login): straight through.
@@ -74,33 +73,6 @@ export function Login() {
           New here? Signing in creates your account and your first
           workspace automatically.
         </div>
-
-        {import.meta.env.DEV && (
-          <div style={{ marginTop: 22, paddingTop: 18, borderTop: `1px dashed ${C.lineSoft}` }}>
-            <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: ".08em",
-              color: C.faint, textTransform: "uppercase", marginBottom: 9 }}>
-              dev only
-            </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <input value={devEmail} onChange={(e) => setDevEmail(e.target.value)}
-                placeholder="you@dev.local"
-                style={{ flex: 1, border: `1px solid ${C.lineSoft}`, borderRadius: 10,
-                  padding: "10px 12px", fontSize: 13.5, background: "#fff",
-                  color: C.ink, outline: "none" }} />
-              <button
-                onClick={() => {
-                  const email = devEmail.trim() || "dev@example.com";
-                  window.location.href = api.devLoginUrl(email,
-                    `${window.location.origin}${next}`);
-                }}
-                style={{ border: "none", borderRadius: 10, padding: "10px 14px",
-                  fontSize: 13.5, fontWeight: 600, background: C.ink, color: "#fff",
-                  cursor: "pointer", whiteSpace: "nowrap" }}>
-                Dev sign in
-              </button>
-            </div>
-          </div>
-        )}
       </div>
 
       <div style={{ marginTop: 26, fontSize: 13, color: C.faint }}>

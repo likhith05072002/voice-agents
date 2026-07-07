@@ -327,7 +327,7 @@ const PLANS = [
     tag: "Full voice AI + developer API. Bring your own number. No monthly fee.",
     cta: "Start free →",
     features: ["Voice AI API + live streaming WebSocket", "Your own API keys", "All 11 Indian languages",
-      "Bring your own number (call forwarding)", "Call logs, transcripts & analytics", "30 free minutes to start"] },
+      "Bring your own number (call forwarding)", "Call logs, transcripts & analytics", "15 free minutes to start"] },
   { name: "Business", price: "₹299", unit: "/mo + ₹3.5/min", featured: false, soon: true,
     tag: "We give you a phone number and handle the setup. Nothing to configure.",
     cta: "Coming soon",

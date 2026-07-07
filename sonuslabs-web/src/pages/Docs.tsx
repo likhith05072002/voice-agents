@@ -108,7 +108,7 @@ function Overview() {
       switches. Available voices come from <IC>GET /voice-lab</IC>:</P>
     <Code lang="json" code={`{"voices": ["ishita", "priya", "ritu", "neha", "kavya", "shreya", "simran", "tanya"]}`} />
     <Note>Usage is billed from your prepaid credits at the platform per-minute rate, per second
-      of call time. New accounts include 30 free minutes. See <b>Billing</b>.</Note>
+      of call time. New accounts include 15 free minutes. See <b>Billing</b>.</Note>
   </>);
 }
 
@@ -632,7 +632,7 @@ function Billing() {
   return (<>
     <H2>Billing & limits</H2>
     <P>SonusLabs is prepaid: you add credits, calls consume them. Every account starts with{" "}
-      <b>30 free minutes</b>.</P>
+      <b>15 free minutes</b>.</P>
     <H3>How usage is billed</H3>
     <Tbl head={["Rule", "Detail"]} rows={[
       ["Rate", "₹3 per minute of call time"],
@@ -646,7 +646,7 @@ function Billing() {
     <P>Every credit movement is a ledger row (see it in <IC>GET /billing/wallet</IC> or the
       console's Billing tab):</P>
     <Tbl head={["kind", "Direction", "Meaning"]} rows={[
-      ["trial_grant", "+", "Your 30 free minutes at signup (once)"],
+      ["trial_grant", "+", "Your 15 free minutes at signup (once)"],
       ["topup", "+", "Credits you purchased"],
       ["call_usage", "−", "A finished call, with its seconds recorded"],
       ["number_rent", "−", "Monthly rent for a claimed phone number"],
@@ -665,7 +665,7 @@ function Billing() {
       `  "balance_paise": 19970,`,
       `  "seconds_left": 3994,`,
       `  "rate_paise_per_min": 300,`,
-      `  "trial_minutes": 30,`,
+      `  "trial_minutes": 15,`,
       `  "ledger": [{"kind": "call_usage", "delta_paise": -85, "seconds": 16.1,`,
       `              "balance_after": 19970, "ref": "web:reception:17833...", "t": 1783374040.1}]`,
       `}`,

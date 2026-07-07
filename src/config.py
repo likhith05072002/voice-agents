@@ -187,7 +187,7 @@ class Settings(BaseSettings):
     # price). Billing is per second at rate/60, rounded up.
     rate_paise_per_min: int = 300
     # Free trial granted once at first sign-in, in minutes of talk time.
-    trial_minutes: int = 30
+    trial_minutes: int = 15
     # Razorpay (top-ups). Empty -> "payments not configured"; dev top-up is
     # available when DEV_LOGIN_ENABLED for local testing.
     razorpay_key_id: str = ""
