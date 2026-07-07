@@ -14,6 +14,12 @@ const TABS: [Tab, string][] = [["agents", "Agents"], ["phone", "Phone"], ["live"
 const rupees = (paise: number) => `₹${(paise / 100).toFixed(2)}`;
 const mins = (seconds: number) => Math.floor(seconds / 60);
 
+// The SonusLabs API origin (dev: backend on :8001; prod: same single origin).
+const apiOrigin = () => (window.location.origin.includes("localhost")
+  ? "http://localhost:8001" : window.location.origin);
+const embedSnippet = (agentId: string, label?: string) =>
+  `<script src="${apiOrigin()}/embed.js"\n        data-agent="${agentId}"\n        data-label="Talk to ${label || "us"}"\n        data-color="#0D9488"></script>`;
+
 /* ─── workspace switcher (accounts mode only) ─── */
 function WorkspaceSwitcher() {
   const { user, workspaces, wsId, setWsId, refresh } = useAuth();
@@ -277,6 +283,7 @@ function AgentDetail({ id, onClose }: { id: string; onClose: () => void }) {
   const [saved, setSaved] = useState(false);
   const [phone, setPhone] = useState("");
   const [callMsg, setCallMsg] = useState("");
+  const [copiedEmbed, setCopiedEmbed] = useState(false);
 
   useEffect(() => { api.agent(id).then(setA).catch(() => {}); api.voiceLab().then((r) => setVoices(r.voices)); }, [id]);
   if (!a) return <div style={{ color: C.darkMuted }}>Loading…</div>;
@@ -352,6 +359,44 @@ function AgentDetail({ id, onClose }: { id: string; onClose: () => void }) {
                 <div style={{ fontSize: 13, color: C.darkMuted }}>No facts yet — add what the agent should know.</div>
               )}
             </div></div>
+
+          {/* Website widget — embed this agent on the client's own site */}
+          <div style={{ borderTop: `1px solid ${C.darkLine}`, paddingTop: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+              <div style={{ ...dlbl, marginBottom: 0 }}>WEBSITE WIDGET</div>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13 }}>
+                <input type="checkbox" checked={!!a.embed_enabled}
+                  onChange={(e) => upd({ embed_enabled: e.target.checked })}
+                  style={{ accentColor: C.accent, width: 16, height: 16 }} />
+                Enable on my website
+              </label>
+            </div>
+            <div style={{ fontSize: 12.5, color: C.darkMuted, marginBottom: 10, lineHeight: 1.55 }}>
+              Add a "Talk to us" voice button to any website — no API key in the page.
+              List the exact site origins allowed to embed it (one per line).
+            </div>
+            {a.embed_enabled && (<>
+              <div style={{ ...dlbl }}>ALLOWED ORIGINS</div>
+              <textarea
+                value={(a.embed_origins || []).join("\n")}
+                onChange={(e) => upd({ embed_origins: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean) })}
+                placeholder={"https://brightsmile.example\nhttp://localhost:5500"}
+                style={{ ...dfield, minHeight: 54, resize: "vertical", fontSize: 13, lineHeight: 1.5,
+                  fontFamily: mono }} />
+              <div style={{ fontSize: 11.5, color: C.darkMuted, margin: "6px 0 12px" }}>
+                Use <span style={{ fontFamily: mono }}>*</span> to allow any site (not recommended). Save after editing.
+              </div>
+              <div style={{ ...dlbl }}>PASTE THIS INTO YOUR SITE</div>
+              <pre style={{ fontFamily: mono, fontSize: 11.5, lineHeight: 1.55, background: C.dark,
+                border: `1px solid ${C.darkLine}`, borderRadius: 9, padding: "10px 12px", overflowX: "auto",
+                color: "#B9AF99", margin: "0 0 8px" }}>{embedSnippet(id, a.name)}</pre>
+              <button onClick={() => { navigator.clipboard.writeText(embedSnippet(id, a.name)); setCopiedEmbed(true); setTimeout(() => setCopiedEmbed(false), 1500); }}
+                style={{ border: "none", borderRadius: 9, padding: "8px 14px", fontSize: 13, fontWeight: 700,
+                  background: copiedEmbed ? "#2E4638" : C.accent, color: copiedEmbed ? "#7BC89B" : C.ink, cursor: "pointer" }}>
+                {copiedEmbed ? "Copied ✓" : "Copy embed snippet"}
+              </button>
+            </>)}
+          </div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <div style={{ background: C.paper, borderRadius: 16, padding: 4 }}>
@@ -1118,6 +1163,10 @@ function DevelopersTab() {
     `       "greeting_text":"Hello! How can I help?"}'`,
   ].join("\n");
   const wsCall = [
+    `# For a WEBSITE, use the widget (no key) — see the agent's "Website widget" section:`,
+    `<script src="${origin}/embed.js" data-agent="<agent_id>" data-label="Talk to us"></script>`,
+    ``,
+    `# For a SERVER or native app, the raw socket takes a key (never in a browser):`,
     `# PCM16 mono 16kHz binary frames in, agent audio + JSON captions out`,
     `${origin.replace("http", "ws")}/web-call?agent_id=<agent_id>&api_key=sk_sonus_...`,
   ].join("\n");

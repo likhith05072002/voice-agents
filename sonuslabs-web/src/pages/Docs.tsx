@@ -94,6 +94,7 @@ function Overview() {
     <H3>What you can build</H3>
     <Tbl head={["Capability", "How"]} rows={[
       ["Agents", "Create, configure and delete AI receptionists (persona, voice, language, knowledge)"],
+      ["Website widget", "One-line embed — a 'Talk to us' voice button on any site, no key in the page"],
       ["Phone numbers", "Claim real numbers for your agents, or keep your existing number and forward it"],
       ["Live voice", "Bidirectional audio over WebSocket — put a talking agent in any app"],
       ["Calls", "Full call history with transcripts, latency metrics and outcomes"],
@@ -239,7 +240,9 @@ function ApiReference() {
 
     <H3>Voice</H3>
     <Tbl head={["Method", "Path", "Description", "Auth"]} rows={[
-      R("WS", "/web-call?agent_id=&api_key=", "Live bidirectional voice call (see Voice streaming)", "🔑"),
+      R("GET", "/embed.js", "The website widget loader (embed on your site, no key)", "—"),
+      R("WS", "/web-call?agent_id=", "Live voice via the widget (Origin-gated, no key)", "—"),
+      R("WS", "/web-call?agent_id=&api_key=", "Live voice raw (server-side/native; key in URL)", "🔑"),
       R("GET", "/voice-lab", "List available voices", "—"),
       R("GET", "/voice-sample/{voice}", "Short audio preview of a voice (WAV)", "—"),
       R("GET", "/language-sample/{lang}", "Audio preview of a language (WAV)", "—"),
@@ -433,13 +436,56 @@ function PhoneNumbers() {
   </>);
 }
 
+function Widget() {
+  return (<>
+    <H2>Website widget</H2>
+    <P>Put a "Talk to us" voice button on any website with <b>one line</b> — a visitor clicks
+      it and talks live to your agent. This is the right way to add voice to a web page:
+      <b> no API key goes in the browser.</b></P>
+
+    <H3>1. Enable the widget on your agent</H3>
+    <P>In the console, open the agent → <b>Website widget</b> → toggle <b>Enable on my
+      website</b> and list the exact site origins allowed to embed it (one per line), e.g.
+      <IC>https://yourbusiness.com</IC>. Save.</P>
+
+    <H3>2. Paste the snippet</H3>
+    <Code lang="html" code={[
+      `<script src="${BASE}/embed.js"`,
+      `        data-agent="your-agent-id"`,
+      `        data-label="Talk to us"`,
+      `        data-color="#0D9488"></script>`,
+    ].join("\n")} />
+    <P>That's it. A floating button appears; clicking it opens the mic and streams a live
+      conversation. Usage bills your SonusLabs wallet like any call.</P>
+    <Tbl head={["Attribute", "Meaning"]} rows={[
+      ["data-agent", "The agent id to talk to (not secret — safe to expose)"],
+      ["data-label", "Button text (default \"Talk to us\")"],
+      ["data-color", "Button + accent colour (hex)"],
+    ]} />
+
+    <H3>Why it's safe without a key</H3>
+    <P>Access is gated by the embedding page's <IC>Origin</IC>, which the browser sets on the
+      WebSocket handshake and <b>cannot be forged from page JavaScript</b>. The server only
+      accepts the call if that Origin is on your agent's allowlist. So even though the
+      <IC>data-agent</IC> id is visible in your page source, nobody can lift it onto another
+      site and spend your credits.</P>
+    <Note>Use the widget for <b>browsers</b>. Use the raw WebSocket with a key (below) only
+      from a <b>trusted server</b> or a native app — never ship an <IC>sk_sonus_</IC> key in
+      web page code.</Note>
+  </>);
+}
+
 function Streaming() {
   return (<>
-    <H2>Voice streaming</H2>
+    <H2>Voice streaming (raw)</H2>
     <Endpoint method="WS" path="/web-call?agent_id=<id>&api_key=sk_sonus_..." />
+    <Note><b>Server-side / native apps only.</b> This raw socket takes an{" "}
+      <IC>sk_sonus_</IC> key in the URL — fine from your backend or a mobile app, but it must
+      NEVER appear in website JavaScript. For a web page, use the <b>Website widget</b> above
+      (no key).</Note>
     <P>One WebSocket = one live phone-quality conversation with an agent. You stream the
       caller's audio up; the agent's voice and live captions stream back. This is the same
-      transport the console's talk orb uses.</P>
+      transport the widget and the console's talk orb use.</P>
     <H3>Sending audio (you → agent)</H3>
     <Tbl head={["Property", "Value"]} rows={[
       ["Encoding", "PCM16, little-endian, mono"],
@@ -663,6 +709,7 @@ const SECTIONS: { id: string; label: string; el: () => JSX.Element }[] = [
   { id: "quickstart", label: "Quickstart", el: Quickstart },
   { id: "api-reference", label: "API reference", el: ApiReference },
   { id: "agents", label: "Agents", el: Agents },
+  { id: "widget", label: "Website widget", el: Widget },
   { id: "phone-numbers", label: "Phone numbers", el: PhoneNumbers },
   { id: "streaming", label: "Voice streaming", el: Streaming },
   { id: "calls", label: "Calls & analytics", el: Calls },

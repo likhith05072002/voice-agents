@@ -90,6 +90,13 @@ class AgentConfig:
     # Telephony routing: DIDs that ring this agent.
     phone_numbers: list[str] = field(default_factory=list)
 
+    # Website widget: when enabled, this agent can be embedded on a web page and
+    # talked to WITHOUT any secret key in the browser — access is gated by the
+    # page's Origin being in embed_origins (browsers can't spoof Origin on the
+    # WS handshake). Usage bills the owning workspace's wallet like any call.
+    embed_enabled: bool = False
+    embed_origins: list[str] = field(default_factory=list)
+
     metadata: dict = field(default_factory=dict)
 
     def normalized_numbers(self) -> list[str]:

@@ -23,6 +23,8 @@ export interface AgentConfig {
   enable_tools?: boolean;
   eagerness?: string;
   industry?: string;
+  embed_enabled?: boolean;
+  embed_origins?: string[];
   [k: string]: unknown;
 }
 

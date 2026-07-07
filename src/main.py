@@ -150,6 +150,19 @@ _PUBLIC_DEMO_AGENTS = {s.strip() for s in
                        (settings.public_demo_agents or "").split(",") if s.strip()}
 
 
+def _origin_allowed(origin: str, allowed: list[str]) -> bool:
+    """Website-widget gate: is the embedding page's Origin on the agent's
+    allowlist? '*' opts into any origin (the owner's explicit choice)."""
+    if not origin or not allowed:
+        return False
+    o = origin.rstrip("/").lower()
+    for a in allowed:
+        a = (a or "").strip().rstrip("/").lower()
+        if a == "*" or a == o:
+            return True
+    return False
+
+
 _sessions = SessionLimiter(settings.max_concurrent_sessions)
 _call_registry = CallRegistry()
 
@@ -266,7 +279,7 @@ def _validate_agent_body(body: dict) -> str | None:
         for d in docs:
             if isinstance(d, str) and len(d) > 4_000:
                 return "a knowledge doc is too long (max 4000 chars)"
-    for lst, cap in (("phone_numbers", 20), ("tool_sets", 20)):
+    for lst, cap in (("phone_numbers", 20), ("tool_sets", 20), ("embed_origins", 20)):
         v = body.get(lst)
         if isinstance(v, list) and len(v) > cap:
             return f"too many {lst} (max {cap})"
@@ -1021,6 +1034,21 @@ async def voice_lab():
     return {"voices": VOICE_LAB_CANDIDATES}
 
 
+# ─── Website widget: the drop-in embed script clients put on their site ───
+@app.get("/embed.js")
+async def embed_js():
+    from fastapi.responses import FileResponse, Response
+    from pathlib import Path as _P
+    f = _P(__file__).resolve().parent.parent / "web" / "embed.js"
+    if not f.is_file():
+        return Response("// embed.js missing", media_type="application/javascript",
+                        status_code=404)
+    # Served to any origin (it's a public loader), cached briefly.
+    return FileResponse(str(f), media_type="application/javascript",
+                        headers={"Access-Control-Allow-Origin": "*",
+                                 "Cache-Control": "public, max-age=300"})
+
+
 # ─── Standalone "Cocolevio Voice" demo (orb + paste-a-website onboarding) ───
 @app.get("/cocolevio")
 async def cocolevio_demo():
@@ -1152,21 +1180,32 @@ async def web_call(websocket: WebSocket):
         demo_call = True                 # unauth/public call -> time cap applies
         credit_cap_s = 0
         if _accounts_on() and agent.agent_id not in _PUBLIC_DEMO_AGENTS:
-            # Workspace agents are private: a session cookie rides on the WS
-            # handshake (browser), or ?api_key= for programmatic access.
-            ws_user = await _auth.current_user(websocket)
-            if ws_user is None:
-                qk = websocket.query_params.get("api_key", "")
-                if qk:
-                    ws_user = await _apikeys.user_for_key(qk)
-            allowed = (ws_user is not None and agent.workspace_id
-                       and await _accounts_repo.is_member(agent.workspace_id,
-                                                          ws_user["id"]))
-            if not allowed:
-                logger.warning("webcall.denied", agent=agent.agent_id)
-                await websocket.close(code=1008)   # policy violation
-                return
-            demo_call = False            # signed-in owner: no 3-min demo cap
+            # THREE ways a private (workspace) agent can be reached:
+            #  1. Website widget — agent.embed_enabled + the page Origin is in
+            #     agent.embed_origins. NO secret key in the browser; the Origin
+            #     header (browsers can't forge it on the WS handshake) is the gate.
+            #  2. Session cookie (the owner in their own console).
+            #  3. ?api_key= (programmatic / server-side).
+            origin = websocket.headers.get("origin", "")
+            embed_ok = (agent.embed_enabled and bool(agent.workspace_id)
+                        and _origin_allowed(origin, agent.embed_origins))
+            if not embed_ok:
+                ws_user = await _auth.current_user(websocket)
+                if ws_user is None:
+                    qk = websocket.query_params.get("api_key", "")
+                    if qk:
+                        ws_user = await _apikeys.user_for_key(qk)
+                allowed = (ws_user is not None and agent.workspace_id
+                           and await _accounts_repo.is_member(agent.workspace_id,
+                                                              ws_user["id"]))
+                if not allowed:
+                    logger.warning("webcall.denied", agent=agent.agent_id,
+                                   origin=origin)
+                    await websocket.close(code=1008)   # policy violation
+                    return
+            else:
+                logger.info("webcall.embed", agent=agent.agent_id, origin=origin)
+            demo_call = False            # owner/embed: no 3-min demo cap
             # Prepaid metering: the wallet must cover the call. Refuse at ~0,
             # and cap the call at what the balance can pay for — divided across
             # this workspace's other active calls (see _billed_active).
