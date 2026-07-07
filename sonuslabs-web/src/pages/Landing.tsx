@@ -251,7 +251,9 @@ export function Landing() {
               border: `1.5px solid ${p.featured ? C.ink : C.line}`, borderRadius: 22, padding: "30px 26px",
               color: p.featured ? "#F3EEE3" : C.ink, position: "relative" }}>
               {p.featured && <div style={{ position: "absolute", top: 16, right: 16, background: C.accent,
-                color: C.ink, fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 100 }}>Most popular</div>}
+                color: C.ink, fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 100 }}>Live now</div>}
+              {p.soon && <div style={{ position: "absolute", top: 16, right: 16, background: "#E7DFCF",
+                color: C.faint, fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 100 }}>Coming soon</div>}
               <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase",
                 color: p.featured ? "#B9B0A0" : C.faint, marginBottom: 14 }}>{p.name}</div>
               <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 6 }}>
@@ -266,15 +268,24 @@ export function Landing() {
                     <span>{f}</span></div>
                 ))}
               </div>
-              <button onClick={() => nav("/create")} style={{ width: "100%", fontSize: 14.5, fontWeight: 600,
-                color: p.featured ? C.ink : "#fff", background: p.featured ? C.accent : C.ink, border: "none",
-                borderRadius: 12, padding: 13, cursor: "pointer" }}>{p.cta}</button>
+              <button
+                disabled={p.soon}
+                onClick={() => {
+                  if (p.soon) return;
+                  if (p.name === "Enterprise") { window.location.href = "mailto:hello@sonuslabs.online?subject=SonusLabs%20Enterprise"; return; }
+                  nav("/create");
+                }}
+                style={{ width: "100%", fontSize: 14.5, fontWeight: 600,
+                  color: p.soon ? C.faint : p.featured ? C.ink : "#fff",
+                  background: p.soon ? "#EEE7D8" : p.featured ? C.accent : C.ink,
+                  border: p.soon ? `1px solid ${C.line}` : "none",
+                  borderRadius: 12, padding: 13, cursor: p.soon ? "default" : "pointer" }}>{p.cta}</button>
             </div>
           ))}
         </div>
         <p style={{ textAlign: "center", fontSize: 13, color: C.faint, marginTop: 18 }}>
-          Pay-as-you-go is the voice AI only — you connect your own carrier (Telnyx / Twilio). Business includes your
-          phone number. Prices in INR, billed per second. Launch pricing — indicative.
+          Pay-as-you-go is live today: full voice AI + API, you connect your own number by call
+          forwarding. Business (we provide the number) is coming soon. Prices in INR, billed per second.
         </p>
       </div>
 
@@ -296,6 +307,7 @@ export function Landing() {
           <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
             <span style={{ fontFamily: serif, fontSize: 18, color: C.ink }}>SonusLabs</span>
             <span>· The receptionist who never sleeps.</span></div>
+          <span style={{ color: C.faint }}>hello@sonuslabs.online</span>
           <div style={{ display: "flex", gap: 18, flexWrap: "wrap", alignItems: "center" }}>
             <span onClick={() => nav("/docs")} style={footLink}>Docs</span>
             <span onClick={() => nav("/privacy")} style={footLink}>Privacy</span>
@@ -311,13 +323,18 @@ export function Landing() {
 const footLink: React.CSSProperties = { cursor: "pointer", color: C.muted };
 
 const PLANS = [
-  { name: "Pay as you go", price: "₹3", unit: "/min", tag: "Bring your own number (Telnyx / Twilio). No monthly fee.", featured: false,
-    cta: "Start free", features: ["Voice AI API — you connect your carrier", "All 11 Indian languages",
-      "Live prices, date & web search", "Interruption handling", "Call transcripts & recordings"] },
-  { name: "Business", price: "₹299", unit: "/mo + ₹3.5/min", tag: "We give you a phone number — nothing to set up.", featured: true,
-    cta: "Choose Business", features: ["Everything in Pay as you go", "Your own phone number, included",
-      "Console: manage agents & calls", "Analytics dashboard", "Appointment booking flows"] },
-  { name: "Enterprise", price: "Custom", unit: "", tag: "For high volume & multi-location.", featured: false,
+  { name: "Pay as you go", price: "₹3", unit: "/min", featured: true, soon: false,
+    tag: "Full voice AI + developer API. Bring your own number. No monthly fee.",
+    cta: "Start free →",
+    features: ["Voice AI API + live streaming WebSocket", "Your own API keys", "All 11 Indian languages",
+      "Bring your own number (call forwarding)", "Call logs, transcripts & analytics", "30 free minutes to start"] },
+  { name: "Business", price: "₹299", unit: "/mo + ₹3.5/min", featured: false, soon: true,
+    tag: "We give you a phone number and handle the setup. Nothing to configure.",
+    cta: "Coming soon",
+    features: ["Everything in Pay as you go", "Your own phone number, included",
+      "Zero setup — we handle forwarding", "Appointment booking flows", "Priority support"] },
+  { name: "Enterprise", price: "Custom", unit: "", featured: false, soon: false,
+    tag: "For high volume & multi-location.",
     cta: "Talk to us", features: ["Volume per-minute rates", "Dedicated hosting & SLA", "On-prem option",
       "CRM / booking integrations", "Priority support"] },
 ];
