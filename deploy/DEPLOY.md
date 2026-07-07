@@ -89,12 +89,63 @@ git pull
 sudo systemctl restart voice-agent
 ```
 
+## Accounts mode — Google sign-in, workspaces, credits, numbers, /admin
+
+By default the app runs in **legacy mode** (SQLite, no login) — exactly as
+above. Setting `DATABASE_URL` flips it to **accounts mode**: Postgres storage,
+Google sign-in, per-workspace tenant isolation, prepaid credits, phone-number
+management, the developer portal, and `/admin`.
+
+**One-command Postgres + backups** (idempotent, safe to re-run):
+
+```bash
+cd ~/sonuslabs
+git pull
+bash deploy/setup_pi_postgres.sh
+```
+
+That installs PostgreSQL, creates the `sonuslabs` DB + role, writes
+`DATABASE_URL` + `SESSION_SECRET` into `.env.production`, and installs a **daily
+`pg_dump` backup cron** (→ `~/sonuslabs/backups`, 14-day retention). Migrations
+run automatically the next time the app boots — no manual migration step.
+
+Then finish by hand in `.env.production`:
+
+```
+GOOGLE_CLIENT_ID=<Google Cloud → Credentials → OAuth client>
+GOOGLE_CLIENT_SECRET=<same>
+ADMIN_EMAILS=likhiths05072002@gmail.com
+# leave OAUTH_REDIRECT_BASE empty — prod uses PUBLIC_URL=https://sonuslabs.online
+```
+
+Install deps + rebuild + restart:
+
+```bash
+.venv/bin/pip install -r requirements.txt          # asyncpg, itsdangerous
+( cd sonuslabs-web && npm ci && npm run build )     # /docs /privacy /terms + console
+sudo systemctl restart voice-agent
+curl -s http://127.0.0.1:8011/health                # {"status":"ok"} → migrations ran
+```
+
+**Google publishing** (so external users can sign in): register redirect URI
+`https://sonuslabs.online/auth/google/callback`, then follow
+`GOOGLE-OAUTH-PUBLISHING.md` (non-sensitive scopes → no heavy verification; needs
+the public `/privacy` + `/terms` pages, which this deploy serves).
+
+> **Off-box the backups.** The money ledger lives only in Postgres. Copy
+> `~/sonuslabs/backups` off the Pi (rclone/scp) on your own schedule — a daily
+> local dump doesn't survive an SD-card failure.
+
+**Restore a backup:** `gunzip -c backups/sonuslabs-<stamp>.sql.gz | psql "$DATABASE_URL"`
+
 ## Phone calls (optional, later)
 
 The web demo needs nothing else. For real phone numbers: fill the `TELNYX_*`
-vars in `.env.production`, restart, and point the Telnyx app's webhook at
-`https://sonuslabs.online/webhook/telnyx` (one time). India numbers use a
-different provider — revisit telephony pricing then (see the cost notes).
+vars in `.env.production` (incl. `TELNYX_PUBLIC_KEY` so webhooks are verified),
+restart, and point the Telnyx app's webhook at
+`https://sonuslabs.online/webhook/telnyx` (one time). In accounts mode, stock
+the number pool via `/admin` → the console **Phone** tab lets customers claim
+them. India numbers use a different provider — revisit telephony pricing then.
 
 ## Troubleshooting
 
