@@ -783,7 +783,7 @@ function AnalyticsTab() {
   const cards = [
     { label: "Total calls", value: String(total), sub: "all time" },
     { label: "Avg response", value: avgLat ? `${avgLat}ms` : "—", sub: "perceived latency" },
-    { label: "Minutes handled", value: String(mins), sub: `≈ ₹${mins * 3} at ₹3/min` },
+    { label: "Minutes handled", value: String(mins), sub: `≈ ₹${(mins * 3.5).toFixed(0)} at ₹3.5/min` },
     { label: "Avg call length", value: avgLen ? `${Math.floor(avgLen / 60)}:${String(avgLen % 60).padStart(2, "0")}` : "—", sub: "minutes:seconds" },
   ];
   // Real breakdown: calls per agent (outcomes aren't classified server-side yet).

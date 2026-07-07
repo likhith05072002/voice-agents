@@ -188,9 +188,9 @@ class Settings(BaseSettings):
     public_demo_agents: str = "sonuslabs"
 
     # ─── Billing (prepaid credits; INTEGER PAISE everywhere) ───
-    # Platform rate charged per minute of call time (300 = ₹3/min, the PAYG
+    # Platform rate charged per minute of call time (350 = ₹3.5/min, the PAYG
     # price). Billing is per second at rate/60, rounded up.
-    rate_paise_per_min: int = 300
+    rate_paise_per_min: int = 350
     # Free trial granted once at first sign-in, in minutes of talk time.
     trial_minutes: int = 15
     # Razorpay (top-ups). Empty -> "payments not configured"; dev top-up is

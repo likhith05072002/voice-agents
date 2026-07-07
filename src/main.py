@@ -221,7 +221,7 @@ def _sonuslabs_demo_agent() -> AgentConfig:
             "About SonusLabs: an AI receptionist that answers business calls "
             "24/7, books appointments, answers customer questions, switches "
             "languages mid-call, and can even speak in the owner's own cloned "
-            "voice; pay-as-you-go from Rs. 3 per minute, no app to install, "
+            "voice; pay-as-you-go from Rs. 3.5 per minute, no app to install, "
             "works with your existing number. If you truly don't know "
             "something, say so plainly and suggest sonuslabs.ai."
         ),

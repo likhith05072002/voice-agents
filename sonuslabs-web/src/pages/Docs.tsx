@@ -635,8 +635,8 @@ function Billing() {
       <b>15 free minutes</b>.</P>
     <H3>How usage is billed</H3>
     <Tbl head={["Rule", "Detail"]} rows={[
-      ["Rate", "₹3 per minute of call time"],
-      ["Granularity", "Per second (₹3/min = 5 paise/sec), rounded up to the whole second"],
+      ["Rate", "₹3.5 per minute of call time"],
+      ["Granularity", "Per second (₹3.5/min ≈ 5.8 paise/sec), rounded up to the whole second"],
       ["When", "Charged when the call ends, for actual connected time"],
       ["What counts", "Every agent call: API WebSocket calls, console test calls, phone calls"],
       ["Numbers", "Phone numbers rent monthly from the same credits (charged at claim)"],
@@ -664,7 +664,7 @@ function Billing() {
       `{`,
       `  "balance_paise": 19970,`,
       `  "seconds_left": 3994,`,
-      `  "rate_paise_per_min": 300,`,
+      `  "rate_paise_per_min": 350,`,
       `  "trial_minutes": 15,`,
       `  "ledger": [{"kind": "call_usage", "delta_paise": -85, "seconds": 16.1,`,
       `              "balance_after": 19970, "ref": "web:reception:17833...", "t": 1783374040.1}]`,

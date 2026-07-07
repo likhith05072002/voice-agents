@@ -83,7 +83,7 @@ export function Landing() {
               textDecoration: "none" }}>See pricing</a>
           </div>
           <div style={{ marginTop: 20, fontSize: 13.5, color: C.faint }}>
-            No app to install · from ₹3/min · bring your own number, or we'll give you one
+            No app to install · from ₹3.5/min · bring your own number, or we'll give you one
           </div>
         </div>
 
@@ -323,12 +323,12 @@ export function Landing() {
 const footLink: React.CSSProperties = { cursor: "pointer", color: C.muted };
 
 const PLANS = [
-  { name: "Pay as you go", price: "₹3", unit: "/min", featured: true, soon: false,
+  { name: "Pay as you go", price: "₹3.5", unit: "/min", featured: true, soon: false,
     tag: "Full voice AI + developer API. Bring your own number. No monthly fee.",
     cta: "Start free →",
     features: ["Voice AI API + live streaming WebSocket", "Your own API keys", "All 11 Indian languages",
       "Bring your own number (call forwarding)", "Call logs, transcripts & analytics", "15 free minutes to start"] },
-  { name: "Business", price: "₹299", unit: "/mo + ₹3.5/min", featured: false, soon: true,
+  { name: "Business", price: "₹299", unit: "/mo + ₹4/min", featured: false, soon: true,
     tag: "We give you a phone number and handle the setup. Nothing to configure.",
     cta: "Coming soon",
     features: ["Everything in Pay as you go", "Your own phone number, included",
