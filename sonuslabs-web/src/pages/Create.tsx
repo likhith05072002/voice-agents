@@ -6,6 +6,9 @@ import { CallPanel } from "../components/CallPanel";
 import { api, AgentConfig } from "../api";
 import { C, serif, LANGS } from "../theme";
 import { useIsMobile } from "../useIsMobile";
+import { CLONE_SECONDS, MIN_CLONE_SECONDS, READ_SCRIPT,
+         startCloneRecording } from "../voiceCloneKit";
+import { fileToB64 } from "../api";
 
 const RESEARCH_LINES = [
   "Reading your website…", "Learning what you do…", "Asking around about you…",
@@ -26,6 +29,42 @@ export function Create() {
   const [voices, setVoices] = useState<string[]>([]);
   const [advOpen, setAdvOpen] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const kbFileRef = useRef<HTMLInputElement | null>(null);
+  const [kbMsg, setKbMsg] = useState("");
+  const [enhancing, setEnhancing] = useState(false);
+  // Step-4 clone-my-voice (the agent exists by then)
+  const [cloneOpen, setCloneOpen] = useState(false);
+  const [cloneState, setCloneState] =
+    useState<"idle" | "rec" | "uploading" | "done" | "error">("idle");
+  const [cloneSecs, setCloneSecs] = useState(0);
+  const [cloneMsg, setCloneMsg] = useState("");
+  const cloneStop = useRef<(() => void) | null>(null);
+  useEffect(() => () => { cloneStop.current?.(); }, []);
+
+  const uploadKb = async (f: File) => {
+    setKbMsg("Reading " + f.name + "…");
+    try {
+      const r = await api.parseDoc(f.name, await fileToB64(f));
+      setDraft((d) => d ? { ...d, knowledge_docs: [...d.knowledge_docs, ...r.docs].slice(0, 60) } : d);
+      setKbMsg(`Added ${r.docs.length} facts from ${f.name}.`);
+    } catch (e: any) {
+      setKbMsg(e?.message?.length > 3 ? e.message : "Couldn't read that file (.txt, .md, .csv, .pdf).");
+    }
+  };
+
+  const enhance = async () => {
+    if (!draft) return;
+    const behaviour = desc.trim()
+      || prompt("Describe how she should behave (e.g. 'debt recovery agent'):") || "";
+    if (!behaviour.trim()) return;
+    setEnhancing(true);
+    try {
+      const r = await api.enhancePrompt(behaviour, draft.name);
+      upd({ system_prompt: r.system_prompt });
+      setAdvOpen(true);
+    } catch { setKbMsg("Enhancement failed — try again."); }
+    finally { setEnhancing(false); }
+  };
 
   useEffect(() => { api.voiceLab().then((r) => setVoices(r.voices)).catch(() => {}); }, []);
   useEffect(() => {
@@ -121,9 +160,9 @@ export function Create() {
               <label style={lbl}>YOUR WEBSITE</label>
               <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://yourbusiness.in"
                 style={{ ...field, marginBottom: 20 }} />
-              <label style={lbl}>HOW SHOULD SHE BEHAVE? <span style={{ fontWeight: 500, color: "#A79E8B" }}>(optional)</span></label>
+              <label style={lbl}>HOW SHOULD SHE BEHAVE? <span style={{ fontWeight: 500, color: "#A79E8B" }}>(optional — any role, it wins over the website)</span></label>
               <textarea value={desc} onChange={(e) => setDesc(e.target.value)}
-                placeholder="Warm and polite. Always offer to book an appointment. Quote today's price when asked."
+                placeholder={"Anything: 'a firm but respectful debt recovery agent' · 'take food orders and upsell combos' · 'book salon appointments, quote prices'"}
                 style={{ ...field, minHeight: 96, resize: "vertical", lineHeight: 1.5 }} />
               {err && <div style={{ color: "#C0492E", fontSize: 13.5, marginTop: 12 }}>{err}</div>}
               <button onClick={runResearch} style={{ ...primaryBtn, width: "100%", marginTop: 20 }}>
@@ -178,10 +217,18 @@ export function Create() {
               <div>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
                   <label style={{ ...lbl, marginBottom: 0 }}>WHAT SHE KNOWS · {draft.knowledge_docs.length} facts</label>
-                  <button onClick={() => upd({ knowledge_docs: [...draft.knowledge_docs, ""] })}
-                    style={{ fontSize: 13, fontWeight: 600, color: C.accentDeep, background: C.accentSoft, border: "none",
-                      borderRadius: 8, padding: "6px 11px", cursor: "pointer" }}>+ Add fact</button>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <input ref={kbFileRef} type="file" accept=".txt,.md,.markdown,.csv,.pdf" style={{ display: "none" }}
+                      onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadKb(f); e.target.value = ""; }} />
+                    <button onClick={() => kbFileRef.current?.click()}
+                      style={{ fontSize: 13, fontWeight: 600, color: C.accentDeep, background: C.accentSoft, border: "none",
+                        borderRadius: 8, padding: "6px 11px", cursor: "pointer" }}>⇪ Upload file</button>
+                    <button onClick={() => upd({ knowledge_docs: [...draft.knowledge_docs, ""] })}
+                      style={{ fontSize: 13, fontWeight: 600, color: C.accentDeep, background: C.accentSoft, border: "none",
+                        borderRadius: 8, padding: "6px 11px", cursor: "pointer" }}>+ Add fact</button>
+                  </div>
                 </div>
+                {kbMsg && <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 8 }}>{kbMsg}</div>}
                 <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
                   {draft.knowledge_docs.map((d, i) => (
                     <div key={i} style={{ display: "flex", gap: 9, alignItems: "flex-start", background: C.paper,
@@ -197,10 +244,16 @@ export function Create() {
                 </div>
               </div>
               <div>
-                <div onClick={() => setAdvOpen((o) => !o)} style={{ display: "flex", alignItems: "center", gap: 8,
-                  cursor: "pointer", fontSize: 13.5, fontWeight: 600, color: C.muted }}>
-                  <span style={{ transform: `rotate(${advOpen ? 90 : 0}deg)`, transition: "transform .2s" }}>▸</span>
-                  Advanced · system prompt</div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <div onClick={() => setAdvOpen((o) => !o)} style={{ display: "flex", alignItems: "center", gap: 8,
+                    cursor: "pointer", fontSize: 13.5, fontWeight: 600, color: C.muted }}>
+                    <span style={{ transform: `rotate(${advOpen ? 90 : 0}deg)`, transition: "transform .2s" }}>▸</span>
+                    Advanced · system prompt <span style={{ fontWeight: 500, color: "#A79E8B" }}>(yours to edit or replace)</span></div>
+                  <button onClick={enhance} disabled={enhancing}
+                    style={{ fontSize: 13, fontWeight: 600, color: C.accentDeep, background: C.accentSoft, border: "none",
+                      borderRadius: 8, padding: "6px 11px", cursor: "pointer", opacity: enhancing ? 0.6 : 1 }}>
+                    {enhancing ? "Enhancing…" : "✨ Enhance from my description"}</button>
+                </div>
                 {advOpen && <textarea value={draft.system_prompt} onChange={(e) => upd({ system_prompt: e.target.value })}
                   style={{ width: "100%", marginTop: 10, minHeight: 140, background: C.ink, color: "#D8CFBE",
                     border: `1px solid ${C.lineSoft}`, borderRadius: 10, padding: 13,
@@ -234,7 +287,67 @@ export function Create() {
             <h1 style={{ fontFamily: serif, fontWeight: 400, fontSize: 38, marginBottom: 6 }}>Say hello to {draft.name}.</h1>
             <p style={{ fontSize: 15.5, color: C.muted, marginBottom: 18 }}>Tap the orb and talk — she answers as your business would.</p>
             <div style={{ maxWidth: 420, margin: "0 auto" }}>
-              <CallPanel agentId={draft.agent_id} subtitle={draft.name} orbSize={200} /></div>
+              <CallPanel agentId={draft.agent_id} subtitle={draft.name} orbSize={200}
+                forceVoice={draft.voice} />
+              <div style={{ marginTop: 14, textAlign: "left" }}>
+                {!cloneOpen ? (
+                  <div style={{ textAlign: "center" }}>
+                    <button onClick={() => setCloneOpen(true)}
+                      style={{ background: "transparent", border: `1px dashed ${C.lineSoft}`, borderRadius: 10,
+                        padding: "8px 16px", fontSize: 13.5, fontWeight: 600, color: C.ink, cursor: "pointer" }}>
+                      🎙 Make her speak in YOUR voice</button>
+                  </div>
+                ) : (
+                  <div style={{ background: C.paperCard, border: `1px solid ${C.line}`, borderRadius: 14,
+                    padding: "13px 15px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                      <span style={{ fontSize: 13, fontWeight: 700 }}>Clone your voice</span>
+                      <span onClick={() => { cloneStop.current?.(); setCloneOpen(false); }}
+                        style={{ cursor: "pointer", color: C.faint }}>✕</span>
+                    </div>
+                    <div style={{ fontSize: 12.5, color: C.muted, lineHeight: 1.5, marginBottom: 8 }}>
+                      Read aloud in English ({CLONE_SECONDS}s) — she'll speak <b>every language</b> in your voice:
+                      <div style={{ color: C.ink, marginTop: 4, fontStyle: "italic" }}>{READ_SCRIPT}</div>
+                    </div>
+                    <button onClick={async () => {
+                      if (cloneState === "rec") { cloneStop.current?.(); return; }
+                      setCloneMsg("");
+                      try {
+                        cloneStop.current = await startCloneRecording({
+                          onTick: setCloneSecs,
+                          onDone: async ({ b64, seconds }) => {
+                            cloneStop.current = null;
+                            if (seconds < MIN_CLONE_SECONDS) {
+                              setCloneState("error"); setCloneMsg(`Too short — record at least ${MIN_CLONE_SECONDS}s.`); return;
+                            }
+                            setCloneState("uploading");
+                            try {
+                              const r = await api.cloneAgentVoice(draft.agent_id, b64);
+                              setDraft((d) => d ? { ...d, voice: r.voice } : d);
+                              setCloneState("done");
+                              setCloneMsg("Done! Tap the orb — she speaks in YOUR voice now.");
+                            } catch (e: any) {
+                              setCloneState("error");
+                              setCloneMsg(String(e?.message || "Cloning failed — try again."));
+                            }
+                          },
+                        });
+                        setCloneState("rec");
+                      } catch { setCloneState("error"); setCloneMsg("Microphone permission denied."); }
+                    }} disabled={cloneState === "uploading"}
+                      style={{ width: "100%", padding: "9px 0", borderRadius: 10, border: "none", fontSize: 13,
+                        fontWeight: 700, cursor: "pointer", color: "#fff",
+                        background: cloneState === "rec" ? C.red : C.ink,
+                        opacity: cloneState === "uploading" ? 0.6 : 1 }}>
+                      {cloneState === "rec" ? `● Recording… ${cloneSecs}s (tap to finish)`
+                        : cloneState === "uploading" ? "Cloning your voice…"
+                        : cloneState === "done" ? "Re-record" : "● Start recording"}</button>
+                    {cloneMsg && <div style={{ fontSize: 12.5, marginTop: 7, fontWeight: 600,
+                      color: cloneState === "error" ? "#B24A2E" : C.green }}>{cloneMsg}</div>}
+                  </div>
+                )}
+              </div>
+            </div>
             <div style={{ display: "flex", gap: 12, justifyContent: "center", marginTop: 24 }}>
               <button onClick={() => nav("/console")} style={primaryBtn}>Open in the console →</button>
             </div>

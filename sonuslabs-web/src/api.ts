@@ -104,6 +104,16 @@ export interface AdminLedgerRow {
   seconds: number | null; t: number; email: string;
 }
 
+// Read an uploaded file to base64 (KB uploads via /onboard/parse-doc).
+export function fileToB64(f: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(",", 2)[1] || "");
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(f);
+  });
+}
+
 // Active workspace: set by the AuthProvider, sent on every console request so
 // the backend scopes agents/calls to the tenant. Module-level (not React state)
 // so the fetch layer stays dependency-free.
@@ -198,6 +208,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ website_url, description }),
     }),
+  enhancePrompt: (description: string, business_name?: string) =>
+    j<{ system_prompt: string }>("/onboard/enhance", {
+      method: "POST", body: JSON.stringify({ description, business_name }) }),
+  parseDoc: (filename: string, content_b64: string) =>
+    j<{ docs: string[]; chars: number }>("/onboard/parse-doc", {
+      method: "POST", body: JSON.stringify({ filename, content_b64 }) }),
 
   voiceLab: () => j<{ voices: string[] }>("/voice-lab"),
   cloneVoice: (language: "en" | "hi", audio_b64: string) =>

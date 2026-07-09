@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { CallPanel } from "../components/CallPanel";
-import { api, AgentConfig, AgentLite, ApiKeyInfo, CallRecord, LiveLine, WalletInfo } from "../api";
+import { api, fileToB64, AgentConfig, AgentLite, ApiKeyInfo, CallRecord, LiveLine, WalletInfo } from "../api";
 import { C, serif, mono, serif as SF, langLabel, LANGS } from "../theme";
 import { useIsMobile } from "../useIsMobile";
 import { useAuth } from "../auth";
@@ -294,6 +294,35 @@ function AgentDetail({ id, onClose }: { id: string; onClose: () => void }) {
   const [cloneMsg, setCloneMsg] = useState("");
   const cloneStop = useRef<(() => void) | null>(null);
   useEffect(() => () => { cloneStop.current?.(); }, []);
+  // System-prompt tools + KB upload
+  const kbFileRef = useRef<HTMLInputElement | null>(null);
+  const [kbMsg, setKbMsg] = useState("");
+  const [enhancing, setEnhancing] = useState(false);
+
+  const uploadKb = async (f: File) => {
+    if (!a) return;
+    setKbMsg("Reading " + f.name + "…");
+    try {
+      const r = await api.parseDoc(f.name, await fileToB64(f));
+      setA((d) => d ? { ...d, knowledge_docs: [...(d.knowledge_docs || []), ...r.docs].slice(0, 60) } : d);
+      setKbMsg(`Added ${r.docs.length} facts from ${f.name} — remember to Save.`);
+    } catch (e: any) {
+      setKbMsg(e?.message?.length > 3 ? e.message : "Couldn't read that file (.txt, .md, .csv, .pdf).");
+    }
+  };
+
+  const enhancePrompt = async () => {
+    if (!a) return;
+    const behaviour = prompt("Describe how the agent should behave (e.g. 'a firm but respectful debt recovery agent'):") || "";
+    if (!behaviour.trim()) return;
+    setEnhancing(true);
+    try {
+      const r = await api.enhancePrompt(behaviour, a.name);
+      upd({ system_prompt: r.system_prompt });
+      setKbMsg("Prompt rewritten from your description — review below, then Save.");
+    } catch { setKbMsg("Enhancement failed — try again."); }
+    finally { setEnhancing(false); }
+  };
 
   useEffect(() => { api.agent(id).then(setA).catch(() => {}); api.voiceLab().then((r) => setVoices(r.voices)); }, [id]);
   if (!a) return <div style={{ color: C.darkMuted }}>Loading…</div>;
@@ -428,11 +457,34 @@ function AgentDetail({ id, onClose }: { id: string; onClose: () => void }) {
               style={{ width: "100%", accentColor: C.accent }} /></div>
           <div>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-              <div style={{ ...dlbl, marginBottom: 0 }}>KNOWLEDGE · {(a.knowledge_docs || []).length} facts</div>
-              <button onClick={() => upd({ knowledge_docs: [...(a.knowledge_docs || []), ""] })}
+              <div style={{ ...dlbl, marginBottom: 0 }}>SYSTEM PROMPT · how she behaves</div>
+              <button onClick={enhancePrompt} disabled={enhancing}
                 style={{ fontSize: 12.5, fontWeight: 600, color: C.ink, background: C.accent, border: "none",
-                  borderRadius: 8, padding: "6px 11px", cursor: "pointer" }}>+ Add fact</button>
+                  borderRadius: 8, padding: "6px 11px", cursor: "pointer", opacity: enhancing ? 0.6 : 1 }}>
+                {enhancing ? "Enhancing…" : "✨ Enhance from a description"}</button>
             </div>
+            <textarea value={a.system_prompt} onChange={(e) => upd({ system_prompt: e.target.value })}
+              style={{ ...dfield, minHeight: 150, resize: "vertical", fontSize: 12.5, lineHeight: 1.55,
+                fontFamily: mono }} />
+            <div style={{ fontSize: 11.5, color: "#9A907C", marginTop: 5 }}>
+              Yours to edit or replace entirely — API users can also set this via PATCH /agents.
+            </div>
+          </div>
+          <div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+              <div style={{ ...dlbl, marginBottom: 0 }}>KNOWLEDGE · {(a.knowledge_docs || []).length} facts</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input ref={kbFileRef} type="file" accept=".txt,.md,.markdown,.csv,.pdf" style={{ display: "none" }}
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadKb(f); e.target.value = ""; }} />
+                <button onClick={() => kbFileRef.current?.click()}
+                  style={{ fontSize: 12.5, fontWeight: 600, color: C.ink, background: C.accent, border: "none",
+                    borderRadius: 8, padding: "6px 11px", cursor: "pointer" }}>⇪ Upload file</button>
+                <button onClick={() => upd({ knowledge_docs: [...(a.knowledge_docs || []), ""] })}
+                  style={{ fontSize: 12.5, fontWeight: 600, color: C.ink, background: C.accent, border: "none",
+                    borderRadius: 8, padding: "6px 11px", cursor: "pointer" }}>+ Add fact</button>
+              </div>
+            </div>
+            {kbMsg && <div style={{ fontSize: 12, color: "#B7AD98", marginBottom: 8 }}>{kbMsg}</div>}
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {(a.knowledge_docs || []).map((d, i) => (
                 <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>

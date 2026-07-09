@@ -420,6 +420,101 @@ async def onboard_research(request: Request):
         await llm.close()
 
 
+@app.post("/onboard/enhance")
+async def onboard_enhance(request: Request):
+    """One-liner behaviour description -> full production system prompt.
+    Powers the '✨ Enhance' button in onboarding and the console editor —
+    users bring ANY role ('debt recovery agent', 'order desk', 'survey
+    caller') and get the hardened live-call prompt for it."""
+    if _accounts_on():
+        if await _auth.current_user(request) is None:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+    body = await request.json()
+    desc = (body.get("description") or "").strip()
+    if not desc:
+        return JSONResponse({"error": "description required"}, status_code=400)
+    from src.onboarding import enhance_prompt
+    llm = SarvamLLMClient(settings.sarvam_api_key, model="sarvam-105b",
+                          max_tokens=900)
+    try:
+        prompt = await enhance_prompt(
+            description=desc, business_name=(body.get("business_name") or "").strip(),
+            complete_json=llm.complete_json)
+        return {"system_prompt": prompt}
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+    except Exception as e:  # noqa: BLE001
+        logger.error("onboard.enhance_failed", error=str(e))
+        return JSONResponse({"error": "enhancement failed; try again"},
+                            status_code=500)
+    finally:
+        await llm.close()
+
+
+def _chunk_doc_text(text: str, chunk_chars: int = 1800,
+                    max_docs: int = 60) -> list[str]:
+    """Split uploaded document text into standalone knowledge facts along
+    paragraph boundaries (falls back to hard splits for wall-of-text files).
+    Sized under the 4,000-char per-doc validation cap with headroom."""
+    paras = [p.strip() for p in re.split(r"\n\s*\n|\r\n\s*\r\n", text) if p.strip()]
+    docs: list[str] = []
+    buf = ""
+    for p in paras:
+        while len(p) > chunk_chars:                 # oversized paragraph
+            docs.append(p[:chunk_chars]); p = p[chunk_chars:]
+        if len(buf) + len(p) + 1 > chunk_chars:
+            if buf:
+                docs.append(buf)
+            buf = p
+        else:
+            buf = f"{buf}\n{p}" if buf else p
+    if buf:
+        docs.append(buf)
+    return docs[:max_docs]
+
+
+class ParseDocBody(BaseModel):
+    filename: str = "document.txt"
+    content_b64: str
+
+
+@app.post("/onboard/parse-doc")
+async def onboard_parse_doc(body: ParseDocBody, request: Request):
+    """Uploaded knowledge file (.txt/.md/.pdf, base64) -> knowledge_docs
+    chunks the agent editor can append. Same auth posture as research."""
+    if _accounts_on():
+        if await _auth.current_user(request) is None:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if len(body.content_b64) > 7_000_000:           # ~5MB raw
+        return JSONResponse({"error": "file too large (max 5MB)"}, status_code=413)
+    try:
+        raw = base64.b64decode(body.content_b64)
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"error": "invalid file data"}, status_code=400)
+    name = (body.filename or "").lower()
+    if name.endswith(".pdf"):
+        try:
+            import io as _io
+            from pypdf import PdfReader
+            reader = PdfReader(_io.BytesIO(raw))
+            text = "\n\n".join((page.extract_text() or "")
+                               for page in reader.pages[:100])
+        except Exception as e:  # noqa: BLE001
+            logger.warning("parse_doc.pdf_failed", error=str(e))
+            return JSONResponse({"error": "could not read that PDF"},
+                                status_code=422)
+    elif name.endswith((".txt", ".md", ".markdown", ".csv")):
+        text = raw.decode("utf-8", errors="replace")
+    else:
+        return JSONResponse(
+            {"error": "supported types: .txt, .md, .csv, .pdf"}, status_code=415)
+    docs = _chunk_doc_text(text)
+    if not docs:
+        return JSONResponse({"error": "no readable text in that file"},
+                            status_code=422)
+    return {"docs": docs, "chars": sum(len(d) for d in docs)}
+
+
 def _warm_agent_kb(agent: AgentConfig) -> None:
     """Fire-and-forget translation warm for one agent's docs (content-hash
     cached, so an unchanged doc costs nothing)."""

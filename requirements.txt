@@ -14,3 +14,4 @@ audioop-lts==0.2.1; python_version >= "3.13"
 # Accounts mode (DATABASE_URL set): Postgres pool + OAuth state signing.
 asyncpg==0.30.0
 itsdangerous==2.2.0
+pypdf==5.1.0
