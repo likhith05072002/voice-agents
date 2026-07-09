@@ -40,6 +40,34 @@ export function Create() {
   const [cloneMsg, setCloneMsg] = useState("");
   const cloneStop = useRef<(() => void) | null>(null);
   useEffect(() => () => { cloneStop.current?.(); }, []);
+  // Step-2 clone: the agent doesn't exist yet, so we HOLD the recording and
+  // apply it right after createAgent (single clone, no wasted slot).
+  const [preClone, setPreClone] = useState<{ b64: string } | null>(null);
+  const [rec2, setRec2] = useState<"idle" | "rec" | "done" | "error">("idle");
+  const [rec2Secs, setRec2Secs] = useState(0);
+  const [rec2Msg, setRec2Msg] = useState("");
+  const rec2Stop = useRef<(() => void) | null>(null);
+  useEffect(() => () => { rec2Stop.current?.(); }, []);
+
+  const recordStep2 = async () => {
+    if (rec2 === "rec") { rec2Stop.current?.(); return; }
+    setRec2Msg("");
+    try {
+      rec2Stop.current = await startCloneRecording({
+        onTick: setRec2Secs,
+        onDone: ({ b64, seconds }) => {
+          rec2Stop.current = null;
+          if (seconds < MIN_CLONE_SECONDS) {
+            setRec2("error"); setRec2Msg(`Too short — record at least ${MIN_CLONE_SECONDS}s.`); return;
+          }
+          setPreClone({ b64 });
+          setRec2("done");
+          setRec2Msg("✓ Your voice is ready — she'll use it once you create her.");
+        },
+      });
+      setRec2("rec");
+    } catch { setRec2("error"); setRec2Msg("Microphone permission denied."); }
+  };
 
   const uploadKb = async (f: File) => {
     setKbMsg("Reading " + f.name + "…");
@@ -104,6 +132,14 @@ export function Create() {
         // suffixes collisions itself).
         if (e.message === "409") { body = { ...body, agent_id: body.agent_id + "-" + Date.now().toString(36).slice(-4) }; made = await api.createAgent(body); }
         else throw e;
+      }
+      // Apply a step-2 voice recording now that the agent exists (held until
+      // here so we never provision a clone the user might abandon).
+      if (preClone) {
+        try {
+          const r = await api.cloneAgentVoice(made.agent_id, preClone.b64);
+          made = { ...made, voice: r.voice };
+        } catch { /* keep the stock voice; they can re-clone in step 4 */ }
       }
       // The SERVER owns the final agent_id (it may suffix for uniqueness) —
       // step 4's talk orb must target what was actually created.
@@ -213,6 +249,31 @@ export function Create() {
                         {v}</div>
                     );
                   })}
+                  {preClone && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, background: C.accentSoft,
+                      border: `1.5px solid ${C.accent}`, borderRadius: 11, padding: "8px 12px",
+                      fontSize: 13.5, fontWeight: 600, color: C.accentDeep }}>🎙 your voice</div>
+                  )}
+                </div>
+                {/* Clone your own voice — held now, applied when she's created */}
+                <div style={{ marginTop: 10 }}>
+                  {rec2 !== "rec" ? (
+                    <button onClick={recordStep2}
+                      style={{ background: "transparent", border: `1px dashed ${C.lineSoft}`, borderRadius: 10,
+                        padding: "7px 14px", fontSize: 13, fontWeight: 600, color: C.ink, cursor: "pointer" }}>
+                      🎙 {preClone ? "Re-record my voice" : "Use my own voice (clone)"}</button>
+                  ) : (
+                    <button onClick={recordStep2}
+                      style={{ background: C.red, border: "none", borderRadius: 10, padding: "8px 15px",
+                        fontSize: 13, fontWeight: 700, color: "#fff", cursor: "pointer" }}>
+                      ● Recording… {rec2Secs}s (tap to finish)</button>
+                  )}
+                  {rec2 === "rec" && (
+                    <div style={{ fontSize: 12.5, color: C.muted, marginTop: 7, lineHeight: 1.5, fontStyle: "italic" }}>
+                      Read aloud: {READ_SCRIPT}</div>
+                  )}
+                  {rec2Msg && <div style={{ fontSize: 12.5, marginTop: 6, fontWeight: 600,
+                    color: rec2 === "error" ? "#C0492E" : C.green }}>{rec2Msg}</div>}
                 </div></div>
               <div>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
