@@ -25,26 +25,35 @@ import structlog
 
 logger = structlog.get_logger()
 
-# The persona skeleton that survived weeks of live-call hardening. The ROLE is
-# now the LLM's to write (receptionist, debt-recovery, survey-taker, anything
-# the owner asks for) — the guardrails stay verbatim: they encode live-call
-# lessons (brevity, same-language, answer-first, no re-greeting) that hold for
-# EVERY role, not just receptionists.
+# The persona skeleton. ONLY the live-call MECHANICS are fixed (brevity,
+# same-language, natural numbers, no re-greeting) — everything about how the
+# agent BEHAVES is role-driven: its goal, its task steps, and crucially HOW it
+# carries the call. The old template hardcoded receptionist-passive behaviour
+# ("answer the caller's question first", "offer a callback") which made every
+# agent react-and-wait — a debt-recovery agent would accept "I'll pay later"
+# and hang up. Now {objective_line} + {drive_line} let a collections/sales/
+# survey agent LEAD and hold the line, while a receptionist stays reactive.
 _PERSONA_TEMPLATE = """You are {assistant_name}, {role_line} {personality_line}
 
-THIS IS A LIVE PHONE CALL. Speak naturally and briefly: 1-2 short sentences unless the caller asks for details, then explain thoroughly. Say numbers and prices as natural speech, not digits.
+THIS IS A LIVE PHONE CALL. Speak naturally and briefly — 1-2 short sentences at a time unless the other person asks for detail. Say numbers and prices as natural speech, not digits.
 
-LANGUAGE: Always reply in the SAME language the caller uses.
+LANGUAGE: Always reply in the SAME language the other person uses.
+
+YOUR GOAL ON THIS CALL: {objective_line}
 
 {task_section}
 
-STAY ACCURATE: Only state specifics that appear in your FACTS. Do not invent products, services, prices, discounts or commitments. If you do not know something, say you will have a staff member confirm and offer to take a callback number — never guess. If the caller's words seem garbled, politely ask them to repeat.
+HOW YOU CARRY THE CALL: {drive_line}
 
-BOUNDARIES: {boundaries_line} For complaints or anything you cannot handle, offer a callback from the team.
+STAY REAL: Only state specifics that appear in your FACTS — never invent amounts, dates, offers, prices, or commitments. If you genuinely do not know something, say you will get it confirmed rather than guess. If the other person's words seem garbled, politely ask them to repeat. Once the call is underway, do not re-greet or reintroduce yourself unless asked who you are.
 
-STYLE: Answer the caller's question directly in your first sentence. Once the call is underway, do not greet again or reintroduce yourself unless asked who you are."""
+BOUNDARIES: {boundaries_line}"""
 
 _DEFAULT_ROLE = "the phone receptionist for {business_name}."
+_DEFAULT_OBJECTIVE = ("Understand what the caller needs, help them, and capture "
+                      "anything the business should follow up on.")
+_DEFAULT_DRIVE = ("Let the caller lead. Answer their question directly in your "
+                  "first sentence, then offer the next helpful step.")
 
 
 def _clean_role_line(role: str, assistant_name: str) -> str:
@@ -70,32 +79,63 @@ async def enhance_prompt(*, description: str, business_name: str = "",
     if not (description or "").strip():
         raise ValueError("describe how the agent should behave")
     draft = await complete_json([
-        {"role": "system", "content":
-            "You design AI phone agents. Expand the owner's behaviour "
-            "description into STRICT JSON with keys: assistant_name (an "
-            "Indian first name fitting the role), role_line (finishes the "
-            "sentence 'You are <name>, ...' in one line, faithful to the "
-            "description), personality_line (one sentence: tone), "
-            "task_section (2-5 sentences starting with an UPPERCASE label "
-            "like 'RECOVERY:' or 'ORDERS:' — the concrete things this agent "
-            "does on a call, including how to open, what to ask for, and how "
-            "to close), boundaries_line (one sentence of role-appropriate "
-            "limits — for sensitive roles like debt recovery include legal "
-            "conduct: no threats, no harassment, respect do-not-call "
-            "requests), greeting_text (one phone greeting matching the "
-            "role). Do NOT invent business facts."},
+        {"role": "system", "content": _ENHANCE_INSTRUCTION},
         {"role": "user", "content":
             f"BUSINESS NAME: {business_name or '(not given)'}\n"
             f"DESIRED BEHAVIOUR:\n{description.strip()[:2000]}"},
     ])
     if not draft or not draft.get("role_line"):
         raise ValueError("could not enhance that description — try rephrasing")
+    return _build_prompt(draft)
+
+
+# The keys the persona-designer LLM must return, and how to phrase them. Shared
+# by the enhancer and the website researcher so both produce agenda-capable
+# agents. drive_line is what makes a collections/sales agent LEAD instead of
+# waiting to be asked.
+_JSON_KEYS = (
+    "assistant_name (an Indian first name fitting the role), "
+    "role_line (finishes 'You are <name>, ...' in one line, faithful to the "
+    "description), personality_line (one sentence: tone), "
+    "objective_line (the ONE concrete goal of this call — e.g. for collections "
+    "'secure a payment today or a firm date and amount'; for a receptionist "
+    "'help the caller and capture their need'; for sales 'book a demo'), "
+    "task_section (2-5 sentences, each starting with an UPPERCASE label like "
+    "'OPENING:' 'COLLECTION:' 'CLOSING:' — the concrete steps this agent works "
+    "through on the call), "
+    "drive_line (1-2 sentences on HOW the agent carries the conversation. For "
+    "PROACTIVE roles — collections, sales, surveys, appointment-setting, "
+    "follow-ups — it must LEAD: briefly acknowledge the person, then steer "
+    "firmly back to the goal, and NEVER accept a vague brush-off like 'later' "
+    "or 'I'll pay when I can' — instead press for specifics and offer concrete "
+    "options, only closing once there is a real commitment or a clear refusal. "
+    "For REACTIVE roles — a receptionist, help desk — let the caller lead and "
+    "answer helpfully. Always stay within boundaries.), "
+    "boundaries_line (one sentence of role-appropriate limits — for sensitive "
+    "roles like debt recovery include legal conduct: no threats, no "
+    "harassment, respect do-not-call requests), "
+    "greeting_text (one phone greeting matching the ROLE)"
+)
+
+_ENHANCE_INSTRUCTION = (
+    "You design AI phone agents of ANY kind — receptionists, debt recovery, "
+    "sales, surveys, appointment-setters. Expand the owner's behaviour "
+    "description into STRICT JSON with keys: " + _JSON_KEYS + ". Match the "
+    "owner's intent exactly: if they want a firm collections agent, make it "
+    "genuinely persistent (within legal limits), not a passive one. Do NOT "
+    "invent business facts.")
+
+
+def _build_prompt(draft: dict) -> str:
     name = draft.get("assistant_name", "Asha")
     return _PERSONA_TEMPLATE.format(
         assistant_name=name,
-        role_line=_clean_role_line(draft["role_line"], name),
+        role_line=_clean_role_line(draft.get("role_line", ""), name)
+        or "the phone assistant.",
         personality_line=draft.get("personality_line", "You are professional and clear."),
+        objective_line=draft.get("objective_line") or _DEFAULT_OBJECTIVE,
         task_section=draft.get("task_section", "GENERAL: Handle the call as described."),
+        drive_line=draft.get("drive_line") or _DEFAULT_DRIVE,
         boundaries_line=draft.get("boundaries_line",
                                   "Never promise anything you cannot confirm."),
     )
@@ -197,27 +237,16 @@ async def research_website(*, url: str, description: str, complete_json,
             "You design AI phone agents (receptionists, debt recovery, order "
             "desks, surveys — whatever the owner asks for). From the research "
             "below, return STRICT JSON with keys: business_name, industry, "
-            "assistant_name (an Indian first name fitting the brand), "
-            "role_line (finishes the sentence 'You are <name>, ...' — e.g. "
-            "'the phone receptionist for Acme.' or 'a firm but respectful "
-            "debt recovery agent calling on behalf of Acme Finance.' — MUST "
-            "follow the owner's description when given), personality_line "
-            "(one sentence: tone), task_section (2-4 sentences starting with "
-            "an UPPERCASE label like 'BOOKINGS:' or 'RECOVERY:' describing "
-            "this agent's caller tasks), boundaries_line (one sentence of "
-            "role-appropriate limits, e.g. no medical/legal advice, no "
-            "threats or harassment, no fake discounts), greeting_text (one "
-            "phone greeting matching the ROLE and naming the business), "
-            "knowledge_docs (array of 8-12 short standalone facts this agent "
-            "needs — ONLY facts present in the research), suggested_language "
-            "(BCP-47 like en-IN or hi-IN). "
+            + _JSON_KEYS + ", knowledge_docs (array of 8-12 short standalone "
+            "facts this agent needs — ONLY facts present in the research), "
+            "suggested_language (BCP-47 like en-IN or hi-IN). "
             "PRIORITY ORDER when sources disagree: (1) the owner's "
             "description of desired behaviour ALWAYS wins — it defines the "
-            "agent's role even if the website suggests otherwise; (2) the "
-            "WEBSITE TEXT is ground truth about the business; (3) WEB "
-            "RESEARCH is a hint only — if it describes a different company "
-            "than the website text (same name, different business), IGNORE "
-            "the web research entirely."},
+            "agent's role AND how proactively it drives the call, even if the "
+            "website suggests a receptionist; (2) the WEBSITE TEXT is ground "
+            "truth about the business; (3) WEB RESEARCH is a hint only — if "
+            "it describes a different company than the website text (same "
+            "name, different business), IGNORE the web research entirely."},
         {"role": "user", "content":
             f"OWNER'S DESCRIPTION OF DESIRED BEHAVIOUR (this wins):\n"
             f"{description or '(none given — default to a receptionist)'}\n\n"
@@ -227,15 +256,9 @@ async def research_website(*, url: str, description: str, complete_json,
     if not draft or not draft.get("business_name"):
         raise ValueError("research produced no usable business profile")
 
-    _name = draft.get("assistant_name", "Asha")
-    system_prompt = _PERSONA_TEMPLATE.format(
-        assistant_name=_name,
-        role_line=_clean_role_line(draft.get("role_line"), _name)
-        or _DEFAULT_ROLE.format(business_name=draft["business_name"]),
-        personality_line=draft.get("personality_line", "You are warm, professional and helpful."),
-        task_section=draft.get("task_section", "GENERAL: Answer questions about the business and take messages."),
-        boundaries_line=draft.get("boundaries_line", "Never promise prices or commitments you cannot confirm."),
-    )
+    if not draft.get("role_line"):
+        draft["role_line"] = _DEFAULT_ROLE.format(business_name=draft["business_name"])
+    system_prompt = _build_prompt(draft)
     agent_id = re.sub(r"[^a-z0-9]+", "-", draft["business_name"].lower()).strip("-")[:40]
     return {
         "agent_id": agent_id or "new-agent",
