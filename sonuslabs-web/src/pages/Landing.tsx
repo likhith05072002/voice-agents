@@ -62,7 +62,7 @@ export function Landing() {
             Built in India · speaks 11 Indian languages
           </div>
           <h1 style={{ fontFamily: serif, fontWeight: 400, fontSize: mob ? 38 : 60, lineHeight: 1.04,
-            letterSpacing: "-.5px", marginBottom: 6 }}>The receptionist who never sleeps.</h1>
+            letterSpacing: "-.5px", marginBottom: 6 }}>The voice of your business.</h1>
           <div style={{ height: mob ? 32 : 40, marginBottom: 20, display: "flex", alignItems: "center", overflow: "hidden" }}>
             <span style={{ fontFamily: TAGLINES[tag].font, fontSize: mob ? 20 : 26, color: C.accent, fontWeight: 600,
               lineHeight: 1.35, whiteSpace: "nowrap", opacity: tagVis ? 1 : 0,
@@ -306,7 +306,7 @@ export function Landing() {
           justifyContent: "space-between", flexWrap: "wrap", gap: 12, color: C.faint, fontSize: 12.5 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
             <span style={{ fontFamily: serif, fontSize: 18, color: C.ink }}>SonusLabs</span>
-            <span>· The receptionist who never sleeps.</span></div>
+            <span>· The voice of your business.</span></div>
           <span style={{ color: C.faint }}>hello@sonuslabs.online</span>
           <div style={{ display: "flex", gap: 18, flexWrap: "wrap", alignItems: "center" }}>
             <span onClick={() => nav("/docs")} style={footLink}>Docs</span>
