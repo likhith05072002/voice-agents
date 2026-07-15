@@ -1446,7 +1446,10 @@ async def cocolevio_demo():
     f = _P(__file__).resolve().parent.parent / "web" / "cocolevio.html"
     if not f.is_file():
         return HTMLResponse("<p>cocolevio.html missing</p>", status_code=404)
-    return FileResponse(str(f), media_type="text/html")
+    # no-store: a stale cached demo page mid-sales-pitch is worse than the
+    # ~30KB re-download (bit us live: new UI invisible until a hard refresh).
+    return FileResponse(str(f), media_type="text/html",
+                        headers={"Cache-Control": "no-store"})
 
 
 # ─── Non-verbal / emotion Phase-0 lab (listen + A/B; see scripts/nonverbal_lab.py) ───
