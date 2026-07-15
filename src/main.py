@@ -1438,6 +1438,22 @@ async def embed_js():
                                  "Cache-Control": "public, max-age=300"})
 
 
+async def _eleven_voice_usable(voice_id: str) -> bool:
+    """Tiny synth probe — the DEFINITIVE usability check. Voice metadata can
+    be visible while synthesis still 402s (library voices on free plans), so
+    only an actual synthesis proves the voice works. Cost: one '.' char."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.post(
+                f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
+                headers={"xi-api-key": settings.elevenlabs_api_key},
+                params={"output_format": "pcm_16000"},
+                json={"text": ".", "model_id": settings.elevenlabs_tts_model})
+        return r.status_code == 200
+    except Exception:  # noqa: BLE001
+        return False
+
+
 # ─── Standalone "Cocolevio Voice" demo (orb + paste-a-website onboarding) ───
 @app.get("/cocolevio")
 async def cocolevio_demo():
@@ -1656,7 +1672,26 @@ async def web_call(websocket: WebSocket):
                      or agent.agent_id in _PUBLIC_DEMO_AGENTS)):
             cand = req_voice.split(":", 1)[1] or settings.elevenlabs_voice_id
             if re.fullmatch(r"[A-Za-z0-9]{8,48}", cand):
-                eleven_vid = cand
+                # Preflight the voice: a rejected voice (library voice on a
+                # free plan) previously produced silent dead air — read live
+                # as "the demo is broken". Tell the browser and fall back.
+                if await _eleven_voice_usable(cand):
+                    eleven_vid = cand
+                else:
+                    fb = settings.elevenlabs_voice_id
+                    if cand != fb and await _eleven_voice_usable(fb):
+                        eleven_vid = fb
+                        await websocket.send_text(json.dumps({
+                            "type": "tts_notice",
+                            "message": ("That ElevenLabs voice isn't available "
+                                        "on this plan (library voices need a "
+                                        "paid ElevenLabs account) — using the "
+                                        "default ElevenLabs voice instead.")}))
+                    else:
+                        await websocket.send_text(json.dumps({
+                            "type": "tts_notice",
+                            "message": ("ElevenLabs is unavailable right now — "
+                                        "using the Sarvam voice instead.")}))
         if eleven_vid:
             tts = ElevenLabsTTSClient(settings.elevenlabs_api_key,
                                       model=settings.elevenlabs_tts_model,
@@ -1773,6 +1808,38 @@ async def web_call(websocket: WebSocket):
 
             cap_task = asyncio.create_task(_time_cap())
 
+        async def handle_control(raw: str) -> None:
+            """Mid-call control frames from the demo page. Today: set_voice —
+            a SAME-provider switch applies in place (the clients support
+            set_voice) and is heard on the agent's next reply."""
+            try:
+                m = json.loads(raw)
+            except json.JSONDecodeError:
+                return
+            if m.get("type") != "set_voice":
+                return
+            want = str(m.get("voice") or "")
+            if want.startswith("eleven:") and isinstance(tts, ElevenLabsTTSClient):
+                vid = want.split(":", 1)[1]
+                if not re.fullmatch(r"[A-Za-z0-9]{8,48}", vid):
+                    return
+                if await _eleven_voice_usable(vid):
+                    await tts.set_voice(vid)
+                    logger.info("webcall.voice_switch", voice_id=vid)
+                    await websocket.send_text(json.dumps(
+                        {"type": "voice_changed", "voice": vid}))
+                else:
+                    await websocket.send_text(json.dumps({
+                        "type": "tts_notice",
+                        "message": ("That voice isn't available on this "
+                                    "ElevenLabs plan — keeping the current "
+                                    "voice.")}))
+            elif want in VOICE_LAB_CANDIDATES and isinstance(tts, SarvamTTSClient):
+                await tts.set_voice(want)
+                logger.info("webcall.voice_switch", voice=want)
+                await websocket.send_text(json.dumps(
+                    {"type": "voice_changed", "voice": want}))
+
         # Reader: browser PCM16-16k -> local VAD (20ms frames) + STT.
         FRAME16 = 640                    # 20ms of PCM16 @16k
         buf = b""
@@ -1785,6 +1852,8 @@ async def web_call(websocket: WebSocket):
                 break
             data = msg.get("bytes")
             if not data:
+                if msg.get("text"):
+                    await handle_control(msg["text"])
                 continue
             buf += data
             while len(buf) >= FRAME16:

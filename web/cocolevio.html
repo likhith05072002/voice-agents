@@ -65,7 +65,10 @@
     padding:9px 11px;color:var(--txt);font-size:13px;outline:none;font-family:inherit}
   .ttsrow input{width:230px;font-family:ui-monospace,monospace;font-size:12.5px}
   .ttsrow input::placeholder{color:#5c6470}
-  .ttsnote{color:#5c6470;font-size:11.5px;margin-top:7px}
+  .ttsnote{color:#5c6470;font-size:12px;margin-top:7px;min-height:15px}
+  .ttsnote.warn{color:#fbbf24}
+  .ttsnote.ok{color:#34d399}
+  .btn-sm{padding:9px 14px;font-size:13px;border-radius:10px}
   @keyframes up{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
   @keyframes spin{to{transform:rotate(360deg)}}
   .hidden{display:none}
@@ -117,8 +120,9 @@
         </select>
         <input id="elVoice" class="hidden" type="text" spellcheck="false" autocomplete="off"
                placeholder="ElevenLabs voice ID" title="ElevenLabs voice ID" />
+        <button id="useVoice" class="btn btn-sm hidden">Use voice</button>
       </div>
-      <div class="ttsnote hidden" id="ttsNote">Premade voices work on the free API tier; library voices (e.g. ljX1Zr…) need a paid ElevenLabs plan.</div>
+      <div class="ttsnote hidden" id="ttsNote"></div>
 
       <!-- call a real phone: the agent dials out over Telnyx -->
       <div class="phonebox">
@@ -201,7 +205,8 @@ async function startCall(){
   catch(e){ setStatus('idle'); $('orbLabel').textContent='Tap to talk'; alert('Microphone permission needed.'); return; }
   stream=ms; ctx=new (window.AudioContext||window.webkitAudioContext)();
   let wsUrl = WS+'/web-call?agent_id='+encodeURIComponent(window._agentId);
-  if ($('ttsProvider').value === 'elevenlabs') {
+  _callProvider = $('ttsProvider').value;
+  if (_callProvider === 'elevenlabs') {
     const vid = ($('elVoice').value.trim() || DEFAULT_EL_VOICE);
     wsUrl += '&voice=' + encodeURIComponent('eleven:' + vid);
   }
@@ -211,6 +216,8 @@ async function startCall(){
   let ps=0, pe=0;
   ws.onmessage=e=>{
     if(typeof e.data==='string'){ const m=JSON.parse(e.data);
+      if(m.type==='tts_notice'){ ttsNote(m.message,'warn'); return; }
+      if(m.type==='voice_changed'){ ttsNote('✓ Voice switched — you\'ll hear it on the next reply.','ok'); return; }
       if(m.type) return; if(m.text&&m.text.trim()) addCap(m.role, m.text); return; }
     const i16=new Int16Array(e.data); const buf=ctx.createBuffer(1,i16.length,16000); const ch=buf.getChannelData(0);
     let pk=0; for(let i=0;i<i16.length;i++){ const s=i16[i]/32768; ch[i]=s; const a=s<0?-s:s; if(a>pk)pk=a; }
@@ -227,17 +234,35 @@ async function startCall(){
     ws.send(out.buffer); if(pk>0.06) level=pk; };
   source.connect(node); const mute=ctx.createGain(); mute.gain.value=0; node.connect(mute); mute.connect(ctx.destination);
 }
-function stopCall(){ const s=ws; ws=null; if(s&&s.readyState<=1)s.close(); proc&&proc.disconnect(); proc=null;
+function stopCall(){ const s=ws; ws=null; _callProvider=null; if(s&&s.readyState<=1)s.close(); proc&&proc.disconnect(); proc=null;
   stream&&stream.getTracks().forEach(t=>t.stop()); stream=null; ctx&&ctx.close().catch(()=>{}); ctx=null;
   active=false; level=0; setStatus('idle'); $('orbLabel').textContent='Tap to talk'; }
 
 // ---------- TTS provider picker ----------
-// Sarah: premade — works on the free ElevenLabs API tier. Library voices
-// (e.g. ljX1ZrXuDIIRVcmiVSyR) 402 until the ElevenLabs plan is paid.
-const DEFAULT_EL_VOICE='EXAVITQu4vr4xnSDxMaL';
+// The bar accepts ANY ElevenLabs voice id. The server preflights it at call
+// start: voices the plan can't use (library voices on a free account) show a
+// notice here and fall back to the default premade voice, so the call always
+// talks. Paste + "Use voice" also switches mid-call.
+const DEFAULT_EL_VOICE='ljX1ZrXuDIIRVcmiVSyR';
 $('elVoice').value=DEFAULT_EL_VOICE;
+let _callProvider=null;
+function ttsNote(msg, cls){ const n=$('ttsNote'); n.textContent=msg||'';
+  n.className='ttsnote'+(cls?' '+cls:''); n.classList.remove('hidden'); }
 $('ttsProvider').onchange=()=>{ const el=$('ttsProvider').value==='elevenlabs';
-  $('elVoice').classList.toggle('hidden',!el); $('ttsNote').classList.toggle('hidden',!el); };
+  $('elVoice').classList.toggle('hidden',!el); $('useVoice').classList.toggle('hidden',!el);
+  $('ttsNote').classList.toggle('hidden',!el);
+  if(el) ttsNote('Any ElevenLabs voice ID works here — checked when the call starts.');
+  // provider changed during a live call: restart so the new engine takes over
+  if(ws && ws.readyState===1){ stopCall(); setTimeout(startCall,300); ttsNote('Switching engine — reconnecting…','ok'); } };
+$('useVoice').onclick=()=>{
+  const vid=$('elVoice').value.trim();
+  if(!/^[A-Za-z0-9]{8,48}$/.test(vid)){ ttsNote('That does not look like an ElevenLabs voice ID.','warn'); return; }
+  if(ws && ws.readyState===1 && _callProvider==='elevenlabs'){
+    ws.send(JSON.stringify({type:'set_voice', voice:'eleven:'+vid}));
+    ttsNote('Checking voice…');
+  } else if(ws && ws.readyState===1){ stopCall(); setTimeout(startCall,300); ttsNote('Switching engine — reconnecting…','ok'); }
+  else ttsNote('Saved — the next call will use this voice.','ok');
+};
 
 // ---------- wire up ----------
 $('go').onclick=()=>{ const u=$('url').value.trim(); $('err').textContent='';
