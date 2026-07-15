@@ -22,6 +22,13 @@ class Settings(BaseSettings):
     inworld_api_key: str = ""
     inworld_tts_model: str = "inworld-tts-1.5-mini"
 
+    # ElevenLabs TTS — optional provider on the Cocolevio demo (dropdown +
+    # voice-id bar). Default voice is Sarah (premade: works on the free API
+    # tier — LIBRARY voices 402 until the ElevenLabs plan is paid).
+    elevenlabs_api_key: str = ""
+    elevenlabs_voice_id: str = "EXAVITQu4vr4xnSDxMaL"
+    elevenlabs_tts_model: str = "eleven_flash_v2_5"
+
     # Sarvam LLM
     sarvam_llm_base_url: str = "https://api.sarvam.ai/v1"
     sarvam_llm_model: str = "sarvam-30b"

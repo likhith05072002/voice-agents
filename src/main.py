@@ -33,6 +33,7 @@ from src.services.stt.sarvam import SarvamSTTClient
 from src.services.llm.sarvam import SarvamLLMClient
 from src.services.tts.sarvam import SarvamTTSClient, KNOWN_VOICES
 from src.services.tts.inworld import InworldTTSClient
+from src.services.tts.elevenlabs import ElevenLabsTTSClient
 from src.pipeline.filler import FillerPlayer
 from src.util.ratelimit import TokenBucket, SessionLimiter
 from src.tenancy.agents import agent_from_settings
@@ -1641,7 +1642,26 @@ async def web_call(websocket: WebSocket):
             elif (agent.voice.startswith("inworld:")
                     and req_voice not in VOICE_LAB_CANDIDATES):
                 inworld_vid = agent.voice.split(":", 1)[1]
-        if inworld_vid:
+        # ElevenLabs ("eleven:<voiceId>"): the Cocolevio demo's provider
+        # dropdown. Demo-scoped: honoured only for public demo agents (or
+        # legacy single-tenant mode) so tenants can't burn our EL quota with
+        # arbitrary voices. Voice id sanitized before it touches the URL.
+        eleven_vid = None
+        if (settings.elevenlabs_api_key
+                and (req_voice or "").startswith("eleven:")
+                and (not _accounts_on()
+                     or agent.agent_id in _PUBLIC_DEMO_AGENTS)):
+            cand = req_voice.split(":", 1)[1] or settings.elevenlabs_voice_id
+            if re.fullmatch(r"[A-Za-z0-9]{8,48}", cand):
+                eleven_vid = cand
+        if eleven_vid:
+            tts = ElevenLabsTTSClient(settings.elevenlabs_api_key,
+                                      model=settings.elevenlabs_tts_model,
+                                      pace=call_pace)
+            await tts.connect(language=agent.language, voice=eleven_vid,
+                              sample_rate="16000")
+            logger.info("webcall.elevenlabs_voice", voice_id=eleven_vid)
+        elif inworld_vid:
             tts = InworldTTSClient(settings.inworld_api_key,
                                    model=settings.inworld_tts_model,
                                    pace=call_pace)

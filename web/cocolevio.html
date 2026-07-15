@@ -60,6 +60,12 @@
   .phonemsg{font-size:12.5px;margin-top:10px;min-height:16px;color:var(--mut)}
   .phonemsg.ok{color:#34d399}
   .phonemsg.err{color:#fb7185}
+  .ttsrow{display:flex;gap:8px;justify-content:center;margin-top:14px}
+  .ttsrow select,.ttsrow input{background:#0e1116;border:1px solid var(--line);border-radius:10px;
+    padding:9px 11px;color:var(--txt);font-size:13px;outline:none;font-family:inherit}
+  .ttsrow input{width:230px;font-family:ui-monospace,monospace;font-size:12.5px}
+  .ttsrow input::placeholder{color:#5c6470}
+  .ttsnote{color:#5c6470;font-size:11.5px;margin-top:7px}
   @keyframes up{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
   @keyframes spin{to{transform:rotate(360deg)}}
   .hidden{display:none}
@@ -102,6 +108,17 @@
       </div>
       <div class="caps" id="caps"></div>
       <div class="hint" id="hint">Tap the orb and say hello. Reply in हिंदी and it follows.</div>
+
+      <!-- TTS provider picker: Sarvam (default) or ElevenLabs + voice id -->
+      <div class="ttsrow">
+        <select id="ttsProvider" title="Voice engine">
+          <option value="sarvam" selected>Sarvam (default)</option>
+          <option value="elevenlabs">ElevenLabs</option>
+        </select>
+        <input id="elVoice" class="hidden" type="text" spellcheck="false" autocomplete="off"
+               placeholder="ElevenLabs voice ID" title="ElevenLabs voice ID" />
+      </div>
+      <div class="ttsnote hidden" id="ttsNote">Premade voices work on the free API tier; library voices (e.g. ljX1Zr…) need a paid ElevenLabs plan.</div>
 
       <!-- call a real phone: the agent dials out over Telnyx -->
       <div class="phonebox">
@@ -183,7 +200,12 @@ async function startCall(){
   let ms; try{ ms=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});}
   catch(e){ setStatus('idle'); $('orbLabel').textContent='Tap to talk'; alert('Microphone permission needed.'); return; }
   stream=ms; ctx=new (window.AudioContext||window.webkitAudioContext)();
-  ws=new WebSocket(WS+'/web-call?agent_id='+encodeURIComponent(window._agentId)); ws.binaryType='arraybuffer';
+  let wsUrl = WS+'/web-call?agent_id='+encodeURIComponent(window._agentId);
+  if ($('ttsProvider').value === 'elevenlabs') {
+    const vid = ($('elVoice').value.trim() || DEFAULT_EL_VOICE);
+    wsUrl += '&voice=' + encodeURIComponent('eleven:' + vid);
+  }
+  ws=new WebSocket(wsUrl); ws.binaryType='arraybuffer';
   ws.onopen=()=>{ setStatus('live'); active=true; $('orbLabel').textContent='Listening'; };
   ws.onclose=()=>{ if(ws) stopCall(); }; ws.onerror=()=>{ if(ws) stopCall(); };
   let ps=0, pe=0;
@@ -208,6 +230,14 @@ async function startCall(){
 function stopCall(){ const s=ws; ws=null; if(s&&s.readyState<=1)s.close(); proc&&proc.disconnect(); proc=null;
   stream&&stream.getTracks().forEach(t=>t.stop()); stream=null; ctx&&ctx.close().catch(()=>{}); ctx=null;
   active=false; level=0; setStatus('idle'); $('orbLabel').textContent='Tap to talk'; }
+
+// ---------- TTS provider picker ----------
+// Sarah: premade — works on the free ElevenLabs API tier. Library voices
+// (e.g. ljX1ZrXuDIIRVcmiVSyR) 402 until the ElevenLabs plan is paid.
+const DEFAULT_EL_VOICE='EXAVITQu4vr4xnSDxMaL';
+$('elVoice').value=DEFAULT_EL_VOICE;
+$('ttsProvider').onchange=()=>{ const el=$('ttsProvider').value==='elevenlabs';
+  $('elVoice').classList.toggle('hidden',!el); $('ttsNote').classList.toggle('hidden',!el); };
 
 // ---------- wire up ----------
 $('go').onclick=()=>{ const u=$('url').value.trim(); $('err').textContent='';
