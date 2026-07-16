@@ -22,3 +22,6 @@ scripts/*.wav
 .gstack/
 data/kb_cache/
 data/nonverbal_lab/
+
+# client-specific demos/agents — never tracked
+private/

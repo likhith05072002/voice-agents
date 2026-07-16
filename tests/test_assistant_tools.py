@@ -21,11 +21,11 @@ def test_wants_web_fires_on_company_research_and_domains():
     for q in [
         "do some research about a company named Koko Livo LLC",
         "tell me something about that company",
-        "the company name is cocolevio.com",
+        "the company name is acmewidgets.com",
         "do some indirect research about that",
-        "cocolevio.com",                       # a bare domain is enough
-        "tell me about cocolevio",
-        "look up cocolevio for me",
+        "acmewidgets.com",                       # a bare domain is enough
+        "tell me about acmewidgets",
+        "look up acmewidgets for me",
         "who owns tesla",
         "find me info about zomato",
     ]:

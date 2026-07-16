@@ -359,14 +359,14 @@ _EXPLICIT_SEARCH_RE = _re.compile(
     r"research|dig (up|into)|read (up )?(on|about))\b", _re.IGNORECASE)
 # LOOKUP intent: research a specific company / website / person / place — a
 # general-knowledge topic the LLM can't answer reliably (esp. small companies).
-# Heard live: "do some research about cocolevio.com" never searched -> the model
+# Heard live: "do some research about acmeconsult.com" never searched -> the model
 # improvised "I can't research that". These must fire a live web lookup.
 _LOOKUP_RE = _re.compile(
     r"\b(tell me (more |something )?about|(more |any |some )?(info|information|details) "
     r"(on|about)|about (the |this )?(company|business|firm|startup|brand|website|"
     r"place|person)|what (does|do|is) .+\b(do|does|make|sell|company|business)|"
     r"who (are|is|owns|runs)\b|about them\b)", _re.IGNORECASE)
-# A bare domain (cocolevio.com, foo.in, bar.ai) is an unambiguous "look this up".
+# A bare domain (acmeconsult.com, foo.in, bar.ai) is an unambiguous "look this up".
 _DOMAIN_RE = _re.compile(
     r"\b[a-z0-9][a-z0-9-]{1,}\.(com|in|ai|co|org|net|io|dev|xyz|app|me|biz|info)\b",
     _re.IGNORECASE)

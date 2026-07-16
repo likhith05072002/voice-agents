@@ -1454,17 +1454,17 @@ async def _eleven_voice_usable(voice_id: str) -> bool:
         return False
 
 
-# ─── Standalone "Cocolevio Voice" demo (orb + paste-a-website onboarding) ───
-@app.get("/cocolevio")
-async def cocolevio_demo():
+# ─── Private demo page (client-specific; file lives OUTSIDE the repo) ───
+@app.get("/demo")
+async def private_demo():
     from fastapi.responses import FileResponse, HTMLResponse
     from pathlib import Path as _P
-    # Private sales demo — 404 unless explicitly enabled (local dev only).
-    if not settings.cocolevio_demo_enabled:
+    # 404 unless .env points at a local file (private/ is untracked).
+    if not settings.private_demo_file:
         return HTMLResponse("<p>not found</p>", status_code=404)
-    f = _P(__file__).resolve().parent.parent / "web" / "cocolevio.html"
+    f = _P(__file__).resolve().parent.parent / settings.private_demo_file
     if not f.is_file():
-        return HTMLResponse("<p>cocolevio.html missing</p>", status_code=404)
+        return HTMLResponse("<p>demo file missing</p>", status_code=404)
     # no-store: a stale cached demo page mid-sales-pitch is worse than the
     # ~30KB re-download (bit us live: new UI invisible until a hard refresh).
     return FileResponse(str(f), media_type="text/html",
@@ -1664,7 +1664,7 @@ async def web_call(websocket: WebSocket):
             elif (agent.voice.startswith("inworld:")
                     and req_voice not in VOICE_LAB_CANDIDATES):
                 inworld_vid = agent.voice.split(":", 1)[1]
-        # ElevenLabs ("eleven:<voiceId>"): the Cocolevio demo's provider
+        # ElevenLabs ("eleven:<voiceId>"): the private demo page's provider
         # dropdown. Demo-scoped: honoured only for public demo agents (or
         # legacy single-tenant mode) so tenants can't burn our EL quota with
         # arbitrary voices. Voice id sanitized before it touches the URL.

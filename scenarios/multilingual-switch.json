@@ -1,11 +1,11 @@
 {
   "name": "multilingual-switch",
-  "main_agent_id": "cocolevio",
+  "main_agent_id": "jewellery",
   "language": "en-IN",
   "caller_voice": "abhilash",
   "steps": [
     {
-      "say": "Hello. I found your website online. Can you tell me what Cocolevio does?",
+      "say": "Hello. I found your website online. Can you tell me what your shop offers?",
       "expect_keywords": [
         "technology"
       ],

@@ -1,11 +1,11 @@
 {
   "name": "kannada-switch",
-  "main_agent_id": "cocolevio",
+  "main_agent_id": "jewellery",
   "language": "en-IN",
   "caller_voice": "abhilash",
   "steps": [
     {
-      "say": "Hello. Can you tell me what Cocolevio does?",
+      "say": "Hello. Can you tell me what your shop offers?",
       "expect_keywords": ["technology"],
       "expect_language": "en-IN"
     },
@@ -25,7 +25,7 @@
       "expect_language": "kn-IN"
     },
     {
-      "say": "Okay, let's switch back to English now. When was Cocolevio founded?",
+      "say": "Okay, let's switch back to English now. When did your shop open?",
       "expect_keywords": ["2015"],
       "expect_language": "en-IN"
     }

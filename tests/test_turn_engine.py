@@ -575,12 +575,12 @@ def test_self_repeat_guard_detects_canned_line():
     e.history = [
         {"role": "user", "content": "who are you"},
         {"role": "assistant",
-         "content": "We are Cocolevio, a technology consulting company based in Austin, Texas, founded in 2015."},
+         "content": "We are Acme, a technology consulting company based in Austin, Texas, founded in 2015."},
         {"role": "user", "content": "tell me about AI in India"},
     ]
     # identical fallback = repeat
     assert e._is_self_repeat(
-        "We are Cocolevio, a technology consulting company based in Austin, Texas.")
+        "We are Acme, a technology consulting company based in Austin, Texas.")
     # a genuinely new answer is NOT a repeat
     assert not e._is_self_repeat(
         "Absolutely, we build custom machine learning models and would love to set up a free consultation.")

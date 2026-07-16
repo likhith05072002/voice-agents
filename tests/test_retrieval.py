@@ -68,8 +68,8 @@ def test_indic_normalization_unifies_spelling_variants():
 
 
 def test_multilingual_variants_retrieved_in_caller_language():
-    docs = ["Products: CocolevioHR, a recruitment automation product.",
-            "Cocolevio is based in Austin, Texas."]
+    docs = ["Products: AcmeHR, a recruitment automation product.",
+            "Acme is based in Austin, Texas."]
     translations = {"hi-IN": [
         "उत्पाद: कोकोलिवियोएचआर, एक भर्ती स्वचालन उत्पाद।",
         "कोकोलिवियो ऑस्टिन, टेक्सास में स्थित है।"]}
@@ -84,13 +84,13 @@ def test_multilingual_variants_retrieved_in_caller_language():
 
 def test_cross_script_query_falls_back_to_whole_kb():
     # A Devanagari query can never token-match English docs; an empty FACTS
-    # section made the live agent deny CocolevioHR existed. Whole-KB fallback.
+    # section made the live agent deny AcmeHR existed. Whole-KB fallback.
     kb = KnowledgeBase([
-        "Cocolevio is a technology consulting company in Austin.",
-        "Products: CocolevioHR, a recruitment automation product.",
+        "Acme is a technology consulting company in Austin.",
+        "Products: AcmeHR, a recruitment automation product.",
     ])
     out = kb.retrieve("क्या आपके पास कोई एचआर प्रोडक्ट है?")
-    assert any("CocolevioHR" in d for d in out)
+    assert any("AcmeHR" in d for d in out)
     # English queries keep precise retrieval (no fallback flood)...
     assert len(kb.retrieve("do you have an HR product?")) == 1
     # ...and irrelevant English queries still inject nothing.

@@ -146,7 +146,7 @@ async def test_language_guard_regenerates_wrong_language_reply():
 
 def test_script_matches_detects_language():
     from src.testing.runner import _script_matches
-    kn = "ನಮ್ಮ ಕಂಪನಿ ಆಸ್ಟಿನ್ ನಗರದಲ್ಲಿದೆ. Cocolevio 2015."
+    kn = "ನಮ್ಮ ಕಂಪನಿ ಆಸ್ಟಿನ್ ನಗರದಲ್ಲಿದೆ. Acme 2015."
     assert _script_matches(kn, "kn-IN") is True
     assert _script_matches(kn, "en-IN") is False
     en = "We are based in Austin, Texas."

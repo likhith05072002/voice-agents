@@ -2,7 +2,7 @@
 
 Third TTS provider behind the same engine contract as SarvamTTSClient and
 InworldTTSClient (``send_text`` → ``flush`` → ``get_audio`` until ``None``,
-``abort`` on barge-in). Used by the Cocolevio demo's provider dropdown.
+``abort`` on barge-in). Used by the private demo page's provider dropdown.
 
 Each utterance is one POST to ``/v1/text-to-speech/{voice_id}/stream`` with
 ``output_format=pcm_16000`` — the response body is RAW PCM16 mono 16k bytes

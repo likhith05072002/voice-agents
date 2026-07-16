@@ -31,7 +31,7 @@ SonusLabs gives any business a human-sounding AI phone receptionist that speaks 
 ## Pages & flows
 
 ### 1. Landing page (marketing)
-- Hero: headline + subline + **the Call Orb with "Talk to our receptionist" button** — clicking starts a REAL web call to the demo agent (agent_id `cocolevio`) right in the hero, with live captions of both sides appearing beneath the orb (user line + agent line, chat-bubble style, exactly like a call transcript). This is the whole pitch in 10 seconds. Mic permission → orb goes live → talk.
+- Hero: headline + subline + **the Call Orb with "Talk to our receptionist" button** — clicking starts a REAL web call to the demo agent (agent_id `sonuslabs`) right in the hero, with live captions of both sides appearing beneath the orb (user line + agent line, chat-bubble style, exactly like a call transcript). This is the whole pitch in 10 seconds. Mic permission → orb goes live → talk.
 - Sections: (a) "Paste your website. Meet your receptionist." — onboarding teaser with a URL input that jumps into the onboarding wizard; (b) language showcase — five language chips that play a short sample line each (`GET /voice-sample/{voice}` returns WAV; render a small audio player styled as a chip); (c) how it works — 3 steps with tasteful illustration; (d) live-data credibility strip — "Quotes today's real gold rate. Knows today's date. Searches the live web."; (e) interruption demo blurb — "Talk over it. It stops. Like a person."; (f) pricing; (g) footer.
 - Pricing section: simple honest cards — Starter (pay-as-you-go ₹X/min), Business (bundle minutes + priority voices), Enterprise (custom + on-prem). Use placeholder numbers marked clearly as launch pricing.
 

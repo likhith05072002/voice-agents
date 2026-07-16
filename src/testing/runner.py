@@ -37,7 +37,7 @@ _SCRIPT_RANGES = {
 def _script_matches(text: str, language: str) -> bool:
     """True if most letters in ``text`` are in ``language``'s script. Loose
     (50%) on purpose: answers legitimately mix scripts for names/brands
-    ("Cocolevio", "Austin") and digits."""
+    ("Acme", "Austin") and digits."""
     letters = [c for c in text if c.isalpha()]
     if not letters:
         return False

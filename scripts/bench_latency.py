@@ -94,19 +94,19 @@ async def bench_stt_endpoint(n: int = 3) -> None:
 
 
 REALISTIC_SYSTEM = (
-    "You are Ava, the virtual receptionist for Cocolevio LLC, a technology "
+    "You are Ava, the virtual receptionist for Acme Consulting LLC, a technology "
     "consulting company in Austin, Texas. Speak as the company (we/our), never "
     "restate the caller's request. Be warm, professional and BRIEF: 1-2 short "
     "sentences unless asked for details.\n\nFACTS (answer from these — never "
-    "invent or contradict them):\n- Cocolevio is a technology consulting "
+    "invent or contradict them):\n- Acme is a technology consulting "
     "company based in Austin, Texas, founded in 2015.\n- Services: custom "
     "software development, cloud migration, AI and machine learning, big data "
-    "analytics.\n- Products: CocolevioHR, a recruitment automation product, "
+    "analytics.\n- Products: AcmeHR, a recruitment automation product, "
     "and LIMS, a learning management system."
 )
 HISTORY = [
-    {"role": "user", "content": "Hi, can you tell me about Cocolevio?"},
-    {"role": "assistant", "content": "Cocolevio is a technology consulting company in Austin, Texas."},
+    {"role": "user", "content": "Hi, can you tell me about Acme?"},
+    {"role": "assistant", "content": "Acme is a technology consulting company in Austin, Texas."},
     {"role": "user", "content": "What services do you offer for retail companies?"},
 ]
 

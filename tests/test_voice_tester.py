@@ -72,12 +72,12 @@ async def test_verify_merges_split_question_fragments():
     record = CallRecord(call_id="c", agent_id="a", turns=[
         Turn("user", "okay switch back to english now", 0.0),
         Turn("assistant", "Of course. How can I help?", 1.0),
-        Turn("user", "when was cocolevio founded", 2.0),
-        Turn("assistant", "Cocolevio was founded in 2015.", 3.0),
+        Turn("user", "when was acme founded", 2.0),
+        Turn("assistant", "Acme was founded in 2015.", 3.0),
     ])
     scenario = Scenario.from_dict({
         "name": "v", "steps": [
-            {"say": "Okay, switch back to English now. When was Cocolevio founded?",
+            {"say": "Okay, switch back to English now. When was Acme founded?",
              "expect_keywords": ["2015"], "expect_language": "en-IN"},
         ]})
 

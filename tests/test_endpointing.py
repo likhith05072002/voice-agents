@@ -48,7 +48,7 @@ def test_context_fragments_are_held_for_continuation():
     assert looks_continuable("Hello. I found your website online.") is True
     assert looks_continuable("अब हम हिंदी में बात करते हैं।") is True
     # actual questions/requests -> fire immediately
-    assert looks_continuable("Can you tell me what Cocolevio does?") is False
+    assert looks_continuable("Can you tell me what Acme does?") is False
     assert looks_continuable("Tell me everything about your services in detail.") is False
     assert looks_continuable("ನಿಮ್ಮ ಕಂಪನಿ ಎಲ್ಲಿದೆ?") is False
     assert looks_continuable("ಕಂಪನಿಯ ಸೇವೆಗಳ ಬಗ್ಗೆ ಹೇಳಿ.") is False

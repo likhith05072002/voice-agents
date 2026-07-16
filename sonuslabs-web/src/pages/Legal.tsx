@@ -8,8 +8,8 @@ import { C, serif } from "../theme";
 import { useIsMobile } from "../useIsMobile";
 
 const UPDATED = "7 July 2026";
-const COMPANY = "SonusLabs, operated by Cocolevio";
-const CONTACT = "indiafinance@cocolevio.com";
+const COMPANY = "SonusLabs";
+const CONTACT = "hello@sonuslabs.online";
 
 function Shell({ title, children }: { title: string; children: React.ReactNode }) {
   const nav = useNavigate();

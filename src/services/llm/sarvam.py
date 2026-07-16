@@ -108,7 +108,7 @@ class SarvamLLMClient:
         self.max_tokens = max_tokens
         # Receptionists state facts; they don't improvise. Default sampling
         # invented services/products on live calls ("vocal review service",
-        # "CocolevioCloud") whenever STT garbled a word.
+        # "AcmeCloud") whenever STT garbled a word.
         self.temperature = temperature
         # Lazily created: constructing an AsyncClient scans the trust store /
         # proxy env (slow on some platforms), so don't pay for it until a real
