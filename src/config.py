@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     inworld_api_key: str = ""
     inworld_tts_model: str = "inworld-tts-1.5-mini"
 
+    # The standalone /cocolevio sales demo. OFF by default: it must never
+    # ship on the public site — it exposes an unauthenticated outbound-dial
+    # box and burns TTS credits. Local dev turns it on via .env.
+    cocolevio_demo_enabled: bool = False
+
     # ElevenLabs TTS — optional provider on the Cocolevio demo (dropdown +
     # voice-id bar). Default voice is Sarah (premade: works on the free API
     # tier — LIBRARY voices 402 until the ElevenLabs plan is paid).

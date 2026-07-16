@@ -1459,6 +1459,9 @@ async def _eleven_voice_usable(voice_id: str) -> bool:
 async def cocolevio_demo():
     from fastapi.responses import FileResponse, HTMLResponse
     from pathlib import Path as _P
+    # Private sales demo — 404 unless explicitly enabled (local dev only).
+    if not settings.cocolevio_demo_enabled:
+        return HTMLResponse("<p>not found</p>", status_code=404)
     f = _P(__file__).resolve().parent.parent / "web" / "cocolevio.html"
     if not f.is_file():
         return HTMLResponse("<p>cocolevio.html missing</p>", status_code=404)

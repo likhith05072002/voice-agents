@@ -18,6 +18,8 @@ for _ext in ("", "-wal", "-shm"):
 os.environ.setdefault("SARVAM_API_KEY", "test")
 # Blank, not fake: cloning endpoints must 503 in tests, never call Inworld.
 os.environ.setdefault("INWORLD_API_KEY", "")
+# The local .env enables the private sales demo; tests assert the SAFE default.
+os.environ.setdefault("COCOLEVIO_DEMO_ENABLED", "false")
 os.environ.setdefault("ENABLE_PERSISTENCE", "false")
 os.environ.setdefault("OUTBOUND_API_KEY", "secret")
 os.environ.setdefault("ADMIN_API_KEY", "admin-secret")
