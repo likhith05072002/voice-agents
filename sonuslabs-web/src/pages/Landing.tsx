@@ -328,17 +328,28 @@ const footLink: React.CSSProperties = { cursor: "pointer", color: C.muted };
 /** "Try it now" — the agent rings the visitor's phone. Server-side throttled
  *  (per IP, per number, platform-wide) because every click is a real carrier
  *  leg; the UI just relays whatever refusal the backend returns. */
+// Country codes we dial — must stay in sync with the server's
+// DEMO_CALL_ALLOWED_PREFIXES (the server refuses anything else anyway).
+const CALL_COUNTRIES = [
+  { iso: "IN", cc: "91" },
+  { iso: "US", cc: "1" },
+];
+
 function TryOnPhone() {
+  const [cc, setCc] = useState("91");
   const [phone, setPhone] = useState("");
   const [state, setState] = useState<"idle" | "calling" | "sent" | "error">("idle");
   const [msg, setMsg] = useState("");
 
   const call = async () => {
-    const digits = phone.replace(/\D/g, "");
-    if (digits.length < 8) { setState("error"); setMsg("Enter your number with country code."); return; }
+    let digits = phone.replace(/\D/g, "");
+    // Forgiving: people paste the country code even with the picker set, so
+    // strip a leading duplicate rather than dialling +91 91 98765...
+    if (digits.length > 10 && digits.startsWith(cc)) digits = digits.slice(cc.length);
+    if (digits.length < 6) { setState("error"); setMsg("Enter your phone number."); return; }
     setState("calling"); setMsg("");
     try {
-      const r = await api.demoCallMe("+" + digits);
+      const r = await api.demoCallMe(`+${cc}${digits}`);
       setState("sent");
       setMsg(`You'll get a call in a few seconds — it runs up to ${Math.round((r.max_seconds || 180) / 60)} minutes.`);
     } catch (e: any) {
@@ -354,12 +365,26 @@ function TryOnPhone() {
         📞 Try it now — let it call your phone
       </div>
       <div style={{ display: "flex", gap: 8 }}>
-        <input value={phone} onChange={(e) => setPhone(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") call(); }}
-          placeholder="+91 98765 43210" inputMode="tel" autoComplete="tel"
-          disabled={state === "calling"}
-          style={{ flex: 1, minWidth: 0, background: C.paper, border: `1px solid ${C.lineSoft}`,
-            borderRadius: 11, padding: "11px 13px", fontSize: 14.5, color: C.ink, outline: "none" }} />
+        {/* country picker + number share one pill, like a phone dialer */}
+        <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center",
+          background: C.paper, border: `1px solid ${C.lineSoft}`, borderRadius: 11 }}>
+          <select value={cc} onChange={(e) => setCc(e.target.value)}
+            disabled={state === "calling"}
+            style={{ background: "transparent", border: "none", outline: "none",
+              padding: "11px 4px 11px 11px", fontSize: 13.5, fontWeight: 600,
+              color: C.ink, cursor: "pointer" }}>
+            {CALL_COUNTRIES.map((c) => (
+              <option key={c.iso} value={c.cc}>{c.iso} +{c.cc}</option>
+            ))}
+          </select>
+          <input value={phone} onChange={(e) => setPhone(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") call(); }}
+            placeholder="98765 43210" inputMode="tel" autoComplete="tel"
+            disabled={state === "calling"}
+            style={{ flex: 1, minWidth: 0, background: "transparent", border: "none",
+              borderRadius: 11, padding: "11px 11px 11px 4px", fontSize: 14.5,
+              color: C.ink, outline: "none" }} />
+        </div>
         <button onClick={call} disabled={state === "calling"}
           style={{ border: "none", borderRadius: 11, padding: "11px 18px", fontSize: 14,
             fontWeight: 700, color: "#fff", background: C.accent, whiteSpace: "nowrap",
