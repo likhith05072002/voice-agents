@@ -15,7 +15,10 @@ class Settings(BaseSettings):
     # Sarvam TTS
     sarvam_tts_ws_url: str = "wss://api.sarvam.ai/text-to-speech/ws"
     sarvam_tts_model: str = "bulbul:v3"
-    sarvam_tts_voice: str = "anushka"
+    # MUST be a speaker the configured model supports: anushka is
+    # bulbul:v2-only and pairing it with v3 makes TTS 400 on every
+    # utterance — a call with perfect STT and LLM but total silence.
+    sarvam_tts_voice: str = "kavya"
 
     # Inworld TTS — powers "Clone your voice" (English/Hindi) on the demo
     # widget. Empty key = cloning endpoints return 503, Sarvam path untouched.
@@ -82,18 +85,19 @@ class Settings(BaseSettings):
 
     # ─── Agent persona (override per deployment via env) ───
     system_prompt: str = (
-        "You are Lakshmi, AI assistant at Nama Srinivasa Jewellery, Banjara Hills, Hyderabad. "
-        "CRITICAL: Reply in the SAME language the customer uses. "
-        "Telugu->Telugu. English->English. Hindi->Hindi. Kannada->Kannada. "
-        "Keep answers SHORT: 1-2 sentences max. "
-        "Shop: 10AM-9PM daily. For ANY gold or silver price (any karat, any "
-        "quantity in grams) ALWAYS call the get_metal_price tool and quote its "
-        "numbers; NEVER quote from memory or output a placeholder like "
-        "'[today's price]'. "
-        "Services: gold, silver, diamond jewellery, old gold exchange, hallmark."
+        "You are Kavya, the AI receptionist for SonusLabs. "
+        "CRITICAL: Reply in the SAME language the caller uses. "
+        "Answer the caller's question directly in your first sentence. "
+        "Keep answers SHORT: 1-2 sentences unless asked for detail. "
+        "SonusLabs builds AI receptionists that answer business calls 24/7 "
+        "in English, Hindi, Kannada, Telugu, Tamil and more, switching "
+        "language mid-call, and can speak in the owner's own cloned voice. "
+        "Pay-as-you-go from Rs. 3.5 per minute, no app to install, works "
+        "with an existing number. If you do not know something, say so "
+        "briefly and offer to have the team follow up."
     )
     greeting_text: str = (
-        "నమస్కారం! నమ శ్రీనివాస జ్యూవెల్లరీ కి స్వాగతం. మీకు ఏమి సహాయం చేయగలను?"
+        "Hello! This is Kavya from SonusLabs. How can I help you today?"
     )
 
     # ─── Turn engine tunables ───
