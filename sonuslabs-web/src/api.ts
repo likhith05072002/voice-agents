@@ -215,6 +215,10 @@ export const api = {
     j<{ docs: string[]; chars: number }>("/onboard/parse-doc", {
       method: "POST", body: JSON.stringify({ filename, content_b64 }) }),
 
+  demoCallMe: (phone: string) =>
+    j<{ status: string; max_seconds: number }>("/demo/call-me", {
+      method: "POST", body: JSON.stringify({ phone }) }),
+
   voiceLab: () => j<{ voices: string[] }>("/voice-lab"),
   cloneVoice: (language: "en" | "hi", audio_b64: string) =>
     j<{ voice_id: string; expires_in_s: number }>("/voice-clone", {

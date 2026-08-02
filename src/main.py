@@ -700,6 +700,94 @@ async def outbound_batch_status(batch_id: str, request: Request):
     return st.to_dict()
 
 
+# ─── Landing-page "call me" demo ───
+# The only endpoint where an anonymous click spends our money on a real
+# carrier leg, so it is deny-by-default and rate-limited on three axes:
+# per IP, per destination number, and platform-wide per hour. The prefix
+# allowlist is the important one — unrestricted dialing is how toll fraud
+# monetises a demo button (premium-rate / satellite ranges).
+
+_demo_call_ip: dict[str, list[float]] = {}      # ip     -> call timestamps
+_demo_call_num: dict[str, list[float]] = {}     # number -> call timestamps
+_demo_call_all: list[float] = []                # platform-wide timestamps
+
+
+def _prune(stamps: list[float], window_s: float, now: float) -> list[float]:
+    return [t for t in stamps if now - t < window_s]
+
+
+def _demo_call_gate(ip: str, number: str) -> str | None:
+    """Returns a user-facing refusal, or None when the call may proceed."""
+    now = time.monotonic()
+    day, hour = 86400.0, 3600.0
+
+    ips = _demo_call_ip[ip] = _prune(_demo_call_ip.get(ip, []), day, now)
+    nums = _demo_call_num[number] = _prune(_demo_call_num.get(number, []), day, now)
+    glob = _demo_call_all[:] = _prune(_demo_call_all, hour, now)
+
+    if glob and len(glob) >= settings.demo_call_global_hourly:
+        return "Our demo line is busy right now — please try again later."
+    if ips and now - max(ips) < settings.demo_call_ip_cooldown_s:
+        return "You just tried a demo call — please wait a few minutes."
+    if len(ips) >= settings.demo_call_per_ip_daily:
+        return "You've used your demo calls for today."
+    if nums and now - max(nums) < settings.demo_call_number_cooldown_s:
+        return "That number was just called — please wait a few minutes."
+    if len(nums) >= settings.demo_call_per_number_daily:
+        return "That number has used its demo calls for today."
+    return None
+
+
+def _demo_call_record(ip: str, number: str) -> None:
+    now = time.monotonic()
+    _demo_call_ip.setdefault(ip, []).append(now)
+    _demo_call_num.setdefault(number, []).append(now)
+    _demo_call_all.append(now)
+
+
+class DemoCallBody(BaseModel):
+    phone: str
+
+
+@app.post("/demo/call-me")
+async def demo_call_me(body: DemoCallBody, request: Request):
+    """Public: the demo agent calls the visitor's phone. Heavily throttled."""
+    if not (settings.demo_call_enabled and settings.telnyx_connection_id):
+        return JSONResponse({"error": "Phone demo isn't available right now."},
+                            status_code=503)
+    number = "+" + re.sub(r"\D", "", body.phone or "")
+    if not re.fullmatch(r"\+\d{8,15}", number):
+        return JSONResponse(
+            {"error": "Enter a valid number with country code, e.g. +91…"},
+            status_code=400)
+    allowed = [p.strip() for p in settings.demo_call_allowed_prefixes.split(",")
+               if p.strip()]
+    if not any(number.startswith(p) for p in allowed):
+        return JSONResponse(
+            {"error": f"Demo calls are available to {', '.join(allowed)} "
+                      f"numbers for now."}, status_code=400)
+    ip = request.client.host if request.client else "?"
+    if (refusal := _demo_call_gate(ip, number)) is not None:
+        return JSONResponse({"error": refusal}, status_code=429)
+
+    demo_id = next(iter(_PUBLIC_DEMO_AGENTS), "") or "sonuslabs"
+    try:
+        # context rides into the call registry -> /media-stream reads the flag
+        # and applies the demo time cap to this leg.
+        ccid = await _place_outbound(to=number, agent_id=demo_id,
+                                     from_number=None,
+                                     context={"demo_call": True})
+    except Exception as e:  # noqa: BLE001
+        logger.error("demo_call.failed", error=str(e))
+        return JSONResponse({"error": "Could not place the call — try again."},
+                            status_code=502)
+    # Only count calls we actually placed, so a carrier failure doesn't burn
+    # the visitor's daily allowance.
+    _demo_call_record(ip, number)
+    logger.info("demo_call.placed", to=number[:6] + "…", call=ccid)
+    return {"status": "calling", "max_seconds": settings.demo_call_max_seconds}
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "active_sessions": _sessions.active, "agents": len(_agent_store)}
@@ -1925,7 +2013,7 @@ async def media_stream(websocket: WebSocket):
         return
 
     stt = llm = tts = recorder = agent = warmup_task = engine = None
-    credit_cap_task = None
+    credit_cap_task = demo_cap_task = None
     billed_phone_ws = None
     resampler = Resampler()
     try:
@@ -2223,6 +2311,31 @@ async def media_stream(websocket: WebSocket):
                 elif ev == "stop":
                     return
 
+        # Landing-page demo leg: hard time cap, with the agent announcing the
+        # ending first so the caller isn't cut off mid-sentence by a silent
+        # hangup. Enforced HERE (server side) — the visitor has no client to
+        # trust, and every extra second is carrier spend.
+        if (info.get("context") or {}).get("demo_call"):
+            async def _demo_cap(cc=ccid) -> None:
+                warn = max(0, settings.demo_call_max_seconds
+                           - settings.demo_call_warn_seconds)
+                try:
+                    await asyncio.sleep(warn)
+                    await engine.announce(
+                        f"By the way, this demo call ends in about "
+                        f"{settings.demo_call_warn_seconds} seconds.")
+                    await asyncio.sleep(settings.demo_call_warn_seconds)
+                except asyncio.CancelledError:
+                    return
+                logger.info("demo_call.time_limit",
+                            seconds=settings.demo_call_max_seconds)
+                try:
+                    await _telnyx.hangup(cc)
+                except Exception:  # noqa: BLE001
+                    pass
+
+            demo_cap_task = asyncio.create_task(_demo_cap())
+
         reader = asyncio.create_task(audio_reader())
         engine_task = asyncio.create_task(engine.run())
         done, pending = await asyncio.wait(
@@ -2279,6 +2392,8 @@ async def media_stream(websocket: WebSocket):
             _billed_end(billed_phone_ws)
         if credit_cap_task is not None:
             credit_cap_task.cancel()
+        if demo_cap_task is not None:
+            demo_cap_task.cancel()
         if warmup_task is not None:
             warmup_task.cancel()
         if stt is not None:

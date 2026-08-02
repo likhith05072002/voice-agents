@@ -224,6 +224,24 @@ class Settings(BaseSettings):
     # Hard cap on a single browser web-call (the sonuslabs.ai demo). 0 disables.
     # Enforced server-side so it cannot be bypassed by editing the client.
     web_call_max_seconds: int = 180
+
+    # ─── Landing-page "call me" demo (public, unauthenticated) ───
+    # Every click DIALS A REAL PHONE on our carrier account, so this is the
+    # one endpoint an abuser can turn directly into our money (toll fraud,
+    # harassment dialing). OFF unless explicitly enabled, and every limit
+    # below is a spend ceiling, not a nicety.
+    demo_call_enabled: bool = False
+    # E.164 country prefixes we will dial. Anything else is refused — this is
+    # the single most important control: premium-rate and satellite ranges are
+    # where dial-fraud pays out.
+    demo_call_allowed_prefixes: str = "+91,+1"
+    demo_call_max_seconds: int = 180          # hard hangup (the 3-minute cap)
+    demo_call_warn_seconds: int = 15          # agent announces the ending here
+    demo_call_ip_cooldown_s: int = 600        # one call per IP per 10 min
+    demo_call_number_cooldown_s: int = 600    # ...and per destination number
+    demo_call_per_ip_daily: int = 3
+    demo_call_per_number_daily: int = 3
+    demo_call_global_hourly: int = 20         # platform-wide spend ceiling
     # Switch the TTS voice language to match the language the caller is speaking.
     enable_language_switch: bool = True
 

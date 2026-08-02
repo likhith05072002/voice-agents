@@ -87,8 +87,11 @@ export function Landing() {
           </div>
         </div>
 
-        {/* LIVE demo call */}
-        <CallPanel agentId={demo} subtitle="live demo · talk to it" voicePicker />
+        {/* LIVE demo call — talk in the browser, or have it ring your phone */}
+        <div>
+          <CallPanel agentId={demo} subtitle="live demo · talk to it" voicePicker />
+          <TryOnPhone />
+        </div>
       </div>
 
       {/* TRUST — business categories, not named companies (brand-neutral) */}
@@ -321,6 +324,57 @@ export function Landing() {
 }
 
 const footLink: React.CSSProperties = { cursor: "pointer", color: C.muted };
+
+/** "Try it now" — the agent rings the visitor's phone. Server-side throttled
+ *  (per IP, per number, platform-wide) because every click is a real carrier
+ *  leg; the UI just relays whatever refusal the backend returns. */
+function TryOnPhone() {
+  const [phone, setPhone] = useState("");
+  const [state, setState] = useState<"idle" | "calling" | "sent" | "error">("idle");
+  const [msg, setMsg] = useState("");
+
+  const call = async () => {
+    const digits = phone.replace(/\D/g, "");
+    if (digits.length < 8) { setState("error"); setMsg("Enter your number with country code."); return; }
+    setState("calling"); setMsg("");
+    try {
+      const r = await api.demoCallMe("+" + digits);
+      setState("sent");
+      setMsg(`You'll get a call in a few seconds — it runs up to ${Math.round((r.max_seconds || 180) / 60)} minutes.`);
+    } catch (e: any) {
+      setState("error");
+      setMsg(e?.message || "Could not place the call — please try again.");
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 14, background: C.paperCard, border: `1px solid ${C.line}`,
+      borderRadius: 18, padding: "14px 15px" }}>
+      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 9 }}>
+        📞 Try it now — let it call your phone
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <input value={phone} onChange={(e) => setPhone(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") call(); }}
+          placeholder="+91 98765 43210" inputMode="tel" autoComplete="tel"
+          disabled={state === "calling"}
+          style={{ flex: 1, minWidth: 0, background: C.paper, border: `1px solid ${C.lineSoft}`,
+            borderRadius: 11, padding: "11px 13px", fontSize: 14.5, color: C.ink, outline: "none" }} />
+        <button onClick={call} disabled={state === "calling"}
+          style={{ border: "none", borderRadius: 11, padding: "11px 18px", fontSize: 14,
+            fontWeight: 700, color: "#fff", background: C.accent, whiteSpace: "nowrap",
+            cursor: state === "calling" ? "default" : "pointer",
+            opacity: state === "calling" ? 0.65 : 1 }}>
+          {state === "calling" ? "Calling…" : "Try SonusLabs"}
+        </button>
+      </div>
+      {msg && (
+        <div style={{ fontSize: 12.5, marginTop: 9, lineHeight: 1.45, fontWeight: 600,
+          color: state === "error" ? "#B24A2E" : C.green }}>{msg}</div>
+      )}
+    </div>
+  );
+}
 
 const PLANS = [
   { name: "Pay as you go", price: "₹3.5", unit: "/min", featured: true, soon: false,

@@ -674,6 +674,32 @@ class TurnEngine:
         self._spoken = ""
         self.state = State.LISTENING
 
+    async def announce(self, text: str, *, wait_s: float = 6.0) -> bool:
+        """Speak an out-of-band line into a live call (e.g. "15 seconds left").
+
+        Driven by an EXTERNAL watchdog, not the turn loop, so it must not cut
+        the caller off mid-answer: it waits for the current turn to finish,
+        then speaks. Returns False if the call stayed busy the whole window —
+        the caller keeps their turn and only the announcement is dropped."""
+        deadline = asyncio.get_event_loop().time() + wait_s
+        while asyncio.get_event_loop().time() < deadline:
+            busy = (self.state != State.LISTENING
+                    or (self._current_turn is not None
+                        and not self._current_turn.done()))
+            if not busy:
+                break
+            await asyncio.sleep(0.2)
+        else:
+            logger.info("announce.skipped_busy", text=text[:40])
+            return False
+        turn = asyncio.create_task(self._do_canned(text))
+        self._current_turn = turn
+        try:
+            await turn
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            return False
+        return True
+
     # ─── smart endpointing (opt-in fragment merge) ───
 
     def _on_user_final(self, txt: str) -> None:
