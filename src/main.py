@@ -1184,7 +1184,10 @@ async def telnyx_webhook(request: Request):
     # Log EVERY event: without this a silent call is undiagnosable — you
     # cannot tell "the callee never answered" from "answered but media never
     # started", which are completely different bugs.
-    logger.info("telnyx.webhook", event=et, direction=p.get("direction", ""),
+    # NB: the kwarg must NOT be named `event` — that's structlog's positional
+    # message parameter, and the collision TypeError'd on every webhook
+    # (broke all calls in prod until the journal traceback gave it away).
+    logger.info("telnyx.webhook", event_type=et, direction=p.get("direction", ""),
                 cause=p.get("hangup_cause", ""), source=p.get("hangup_source", ""),
                 call=ccid[-12:])
 
