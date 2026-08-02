@@ -335,6 +335,15 @@ class TurnEngine:
             self._current_turn = asyncio.create_task(self._do_greeting())
         try:
             await self._event_loop()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # The engine task is created with create_task and its exception is
+            # swallowed by the caller's teardown, so a crash here used to make
+            # the agent go permanently mute mid-call with NOTHING in the log —
+            # indistinguishable from "the caller stopped talking". Never again.
+            logger.exception("engine.crashed")
+            raise
         finally:
             if self._current_turn and not self._current_turn.done():
                 try:
@@ -403,14 +412,35 @@ class TurnEngine:
                 logger.info("stt.transcript", state=self.state.value,
                             lang=evt.language,
                             text=_safe_text(txt, 80))
-                if self._candidate:
-                    self._track_language(evt.language, txt)
-                    await self._resolve_candidate(txt)
-                elif self.state in (State.SPEAKING, State.THINKING):
-                    self._track_language(evt.language, txt)
-                    verdict = self._classify(txt)
-                    if verdict in (Verdict.HARD, Verdict.REAL):
-                        await self._confirm_interrupt(txt)
+                # A failure while handling ONE utterance must not kill the call.
+                # These paths tear down the live turn (cancel the LLM, abort the
+                # TTS socket, flush audio); if any step raises, the engine loop
+                # used to die and the agent went silent for the rest of the
+                # call. Log it, drop that utterance, keep listening.
+                interrupt_path = self._candidate or self.state in (
+                    State.SPEAKING, State.THINKING)
+                if interrupt_path:
+                    try:
+                        if self._candidate:
+                            self._track_language(evt.language, txt)
+                            await self._resolve_candidate(txt)
+                        else:
+                            self._track_language(evt.language, txt)
+                            verdict = self._classify(txt)
+                            if verdict in (Verdict.HARD, Verdict.REAL):
+                                await self._confirm_interrupt(txt)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        # Tearing down a live turn touches the LLM, the TTS
+                        # socket and the playback queue. If any step raises,
+                        # the engine loop used to die and the agent went mute
+                        # for the REST of the call. Recover instead.
+                        logger.exception("interrupt.failed")
+                        self._candidate = False
+                        self._pump_gate.set()        # never leave audio paused
+                        self.state = State.LISTENING
+                    continue
                 else:
                     # LISTENING: junk gates BEFORE anything enters history.
                     # Long calls degrade because the context window fills with
