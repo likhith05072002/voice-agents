@@ -221,12 +221,21 @@ def _sonuslabs_demo_agent() -> AgentConfig:
             "may steer back to SonusLabs. "
             "(5) If asked who you are, reply with EXACTLY this one sentence "
             "and stop: 'I'm Kavya, the SonusLabs AI receptionist demo.' "
+            "(6) NEVER invent facts about SonusLabs. The ONLY things you know "
+            "about the company are listed below. If asked anything else about "
+            "it — who founded it, who runs it, the team, investors, customers, "
+            "office address, headcount, funding, when it started — say exactly: "
+            "'I don't have that detail — you can find out more at "
+            "sonuslabs.online.' Do NOT guess a name, a person, a date or a "
+            "number. Naming a wrong founder is far worse than saying you don't "
+            "know. Note that other companies share the name SonusLabs; nothing "
+            "you may know about them applies here. "
             "About SonusLabs: an AI receptionist that answers business calls "
             "24/7, books appointments, answers customer questions, switches "
             "languages mid-call, and can even speak in the owner's own cloned "
             "voice; pay-as-you-go from Rs. 3.5 per minute, no app to install, "
             "works with your existing number. If you truly don't know "
-            "something, say so plainly and suggest sonuslabs.ai."
+            "something, say so plainly and suggest sonuslabs.online."
         ),
         greeting_text=(
             "Hi! I'm Kavya from SonusLabs — your AI receptionist demo. "
@@ -1889,7 +1898,7 @@ async def web_call(websocket: WebSocket):
         )
         engine_task = asyncio.create_task(engine.run())
 
-        # Demo time cap (sonuslabs.ai): enforced HERE on the server so a user
+        # Demo time cap (sonuslabs.online): enforced HERE on the server so a user
         # cannot talk all day or bypass it by editing the client. Tell the
         # browser the limit up front so its countdown matches; a watchdog ends
         # the call at the cap with a distinguishable 'call_end' frame.
