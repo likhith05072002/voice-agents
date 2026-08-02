@@ -30,6 +30,7 @@ callback, so the whole engine is driven by fakes in tests without any network.
 
 import asyncio
 import audioop
+import traceback
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -342,7 +343,7 @@ class TurnEngine:
             # swallowed by the caller's teardown, so a crash here used to make
             # the agent go permanently mute mid-call with NOTHING in the log —
             # indistinguishable from "the caller stopped talking". Never again.
-            logger.exception("engine.crashed")
+            logger.error("engine.crashed", tb=traceback.format_exc())
             raise
         finally:
             if self._current_turn and not self._current_turn.done():
@@ -436,7 +437,7 @@ class TurnEngine:
                         # socket and the playback queue. If any step raises,
                         # the engine loop used to die and the agent went mute
                         # for the REST of the call. Recover instead.
-                        logger.exception("interrupt.failed")
+                        logger.error("interrupt.failed", tb=traceback.format_exc())
                         self._candidate = False
                         self._pump_gate.set()        # never leave audio paused
                         self.state = State.LISTENING
@@ -631,10 +632,11 @@ class TurnEngine:
         if verdict in (Verdict.HARD, Verdict.REAL):
             ms = round((time.perf_counter() - self._candidate_t0) * 1000)
             logger.info("barge_in.confirmed", verdict=verdict.value, decide_ms=ms,
-                        text=transcript[:40])
+                        text=_safe_text(transcript, 40))
             await self._confirm_interrupt(transcript)
         else:
-            logger.info("barge_in.false", verdict=verdict.value, text=transcript[:40])
+            logger.info("barge_in.false", verdict=verdict.value,
+                        text=_safe_text(transcript, 40))
             self._resume_playback()
 
     def _resume_playback(self) -> None:
@@ -722,7 +724,7 @@ class TurnEngine:
                 break
             await asyncio.sleep(0.2)
         else:
-            logger.info("announce.skipped_busy", text=text[:40])
+            logger.info("announce.skipped_busy", text=_safe_text(text, 40))
             return False
         turn = asyncio.create_task(self._do_canned(text))
         self._current_turn = turn
