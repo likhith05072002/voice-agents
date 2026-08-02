@@ -26,7 +26,11 @@ def safe(text: str, limit: int = 200) -> str:
     """Loggable form of a transcript: readable where possible, never lossy."""
     if not text:
         return ""
-    clipped = text[:limit]
+    # Collapse newlines/tabs FIRST: sarvam-105b prefixes replies with "\n",
+    # which splits the log line in two and makes a perfectly good answer read
+    # as `text=` followed by an orphaned fragment (mistaken for an empty
+    # reply during a live incident).
+    clipped = " ".join(text.split())[:limit]
     if _UTF8:
         return clipped
     # cp1252 console: \uXXXX escapes keep the script identifiable and the
