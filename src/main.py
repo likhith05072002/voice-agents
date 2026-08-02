@@ -21,6 +21,8 @@ from contextlib import asynccontextmanager
 
 import httpx
 import structlog
+
+from src.util.logtext import safe as _safe_text
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -1873,7 +1875,7 @@ async def web_call(websocket: WebSocket):
 
         def transcript_sink(role: str, text: str) -> None:
             logger.info("transcript", agent=agent.agent_id, role=role,
-                        text=text[:200].encode("ascii", "replace").decode())
+                        text=_safe_text(text, 200))
             payload = json.dumps({"role": role, "text": text})
             asyncio.ensure_future(websocket.send_text(payload))
 
@@ -2194,7 +2196,7 @@ async def media_stream(websocket: WebSocket):
 
         def transcript_sink(role: str, text: str) -> None:
             logger.info("transcript", agent=agent.agent_id, role=role,
-                        text=text[:200].encode("ascii", "replace").decode())
+                        text=_safe_text(text, 200))
             if recorder is not None:
                 recorder.transcript(role, text)
             _live_transcripts.append(

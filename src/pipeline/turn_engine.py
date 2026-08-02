@@ -37,6 +37,8 @@ from enum import Enum
 
 import structlog
 
+from src.util.logtext import safe as _safe_text
+
 from src.services.stt.sarvam import TranscriptEvent, VADEvent
 from src.services.llm.sarvam import SentenceEvent
 from src.pipeline.barge_in import classify, Verdict, BACKCHANNELS, HARD_INTERRUPT
@@ -400,7 +402,7 @@ class TurnEngine:
                     continue
                 logger.info("stt.transcript", state=self.state.value,
                             lang=evt.language,
-                            text=txt[:80].encode("ascii", "replace").decode())
+                            text=_safe_text(txt, 80))
                 if self._candidate:
                     self._track_language(evt.language, txt)
                     await self._resolve_candidate(txt)
@@ -419,11 +421,11 @@ class TurnEngine:
                     # with " what is that?").
                     if self._is_backchannel_only(txt):
                         logger.info("listening.backchannel_ignored",
-                                    text=txt[:30].encode("ascii", "replace").decode())
+                                    text=_safe_text(txt, 30))
                         continue
                     if self._looks_like_own_echo(txt):
                         logger.info("listening.self_echo_dropped",
-                                    text=txt[:50].encode("ascii", "replace").decode())
+                                    text=_safe_text(txt, 50))
                         self._notify_false_recovery()   # let the echo profile adapt
                         continue
                     self._track_language(evt.language, txt)
@@ -712,7 +714,7 @@ class TurnEngine:
         merged = f"{self._pending_user_text} {txt}".strip() if self._pending_user_text else txt
         if looks_continuable(merged):
             self._pending_user_text = merged
-            logger.info("endpoint.hold", text=merged[:60].encode("ascii", "replace").decode())
+            logger.info("endpoint.hold", text=_safe_text(merged, 60))
             self._arm_continuation()
         else:
             self._pending_user_text = ""
@@ -740,7 +742,7 @@ class TurnEngine:
         self._continuation_timer = None
         if txt:
             logger.info("endpoint.fire_on_timeout",
-                        text=txt[:60].encode("ascii", "replace").decode())
+                        text=_safe_text(txt, 60))
             self._start_turn(txt)
 
     async def _confirm_interrupt(self, next_transcript: str) -> None:
@@ -923,7 +925,7 @@ class TurnEngine:
                     if first and retries < 2 and self._wrong_language(evt.text):
                         lang = LANGUAGE_NAMES.get(self._caller_language, "")
                         logger.warning("language.guard_retry", want=lang, n=retries + 1,
-                                       got=evt.text[:40].encode("ascii", "replace").decode())
+                                       got=_safe_text(evt.text, 40))
                         self.llm.cancel()
                         llm_task.cancel()
                         try:
@@ -955,7 +957,7 @@ class TurnEngine:
                     if (first and retries < 2
                             and self._is_parrot(evt.text)):
                         logger.warning("parrot.guard_retry",
-                                       got=evt.text[:40].encode("ascii", "replace").decode())
+                                       got=_safe_text(evt.text, 40))
                         self.llm.cancel()
                         llm_task.cancel()
                         try:
@@ -981,7 +983,7 @@ class TurnEngine:
                     if (first and retries < 2
                             and self._is_self_repeat(evt.text)):
                         logger.warning("self_repeat.guard_retry",
-                                       got=evt.text[:40].encode("ascii", "replace").decode())
+                                       got=_safe_text(evt.text, 40))
                         self.llm.cancel()
                         llm_task.cancel()
                         try:
@@ -1010,7 +1012,7 @@ class TurnEngine:
                     # language-guard treatment.
                     if first and _is_greeting_only(evt.text):
                         logger.info("greeting_opener_suppressed",
-                                    text=evt.text[:30].encode("ascii", "replace").decode())
+                                    text=_safe_text(evt.text, 30))
                         continue
                     first = False
                     text, blocked = self._guard(evt.text, active_prompt)
@@ -1109,7 +1111,7 @@ class TurnEngine:
     async def _do_turn(self, transcript: str) -> None:
         if self.turn_bucket is not None and not self.turn_bucket.allow(asyncio.get_event_loop().time()):
             logger.warning("ratelimit.turn_dropped",
-                           text=transcript[:40].encode("ascii", "replace").decode())
+                           text=_safe_text(transcript, 40))
             self.state = State.LISTENING
             return
         self.state = State.THINKING
@@ -1120,14 +1122,14 @@ class TurnEngine:
         tl.mark("transcript_in")
         self._last_speech_end = None
         self._turn_metrics = tl
-        logger.info("turn.start", user_text=transcript[:80].encode("ascii", "replace").decode())
+        logger.info("turn.start", user_text=_safe_text(transcript, 80))
         # The prompt-leak guard only ARMS when the caller actually tried to
         # extract the prompt this turn. Otherwise a legitimate self-description
         # ("what does your company do") gets refused as a "leak" (heard live).
         self._injection_turn = self.enable_safety and is_injection(transcript)
         if self._injection_turn:
             logger.warning("safety.injection_flagged",
-                           text=transcript[:60].encode("ascii", "replace").decode())
+                           text=_safe_text(transcript, 60))
         self.history.append({"role": "user", "content": transcript})
         self._emit_transcript("user", transcript)
 
@@ -1259,7 +1261,7 @@ class TurnEngine:
         said = self._spoken if self._spoken.strip() else full
         if said.strip():
             self.history.append({"role": "assistant", "content": said})
-            logger.info("turn.done", assistant_text=said[:100].encode("ascii", "replace").decode())
+            logger.info("turn.done", assistant_text=_safe_text(said, 100))
         self.history = prune(self.history)
         self._publish_metrics(tl)
         if self._turn_metrics is tl:
