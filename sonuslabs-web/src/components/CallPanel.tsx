@@ -131,15 +131,15 @@ export const CallPanel = memo(function CallPanel({ agentId, subtitle, orbSize = 
               padding: "7px 10px", fontSize: 13, color: C.ink, outline: "none",
               textTransform: "capitalize", cursor: status === "idle" ? "pointer" : "default",
               opacity: status === "idle" ? 1 : 0.6 }}>
-            <option value="">Neha (default)</option>
-            {voices.filter((v) => v !== "neha").map((v) => (
+            <option value="">Kavya (default)</option>
+            {voices.filter((v) => v !== "kavya").map((v) => (
               <option key={v} value={v} style={{ textTransform: "capitalize" }}>{v}</option>
             ))}
             {clonedId && (
               <option value={`inworld:${clonedId}`}>🎙 Your voice (cloned)</option>
             )}
           </select>
-          <span onClick={() => previewVoice(voice || "neha")} title="Preview this voice"
+          <span onClick={() => previewVoice(voice || "kavya")} title="Preview this voice"
             style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 28,
               height: 28, borderRadius: "50%", background: C.ink,
               cursor: voice.startsWith("inworld:") ? "default" : "pointer",

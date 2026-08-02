@@ -86,8 +86,8 @@ def test_delete_clone_reverts_to_stock(cloning_on):
     client.post("/agents/vc-del/voice-clone", headers=H,
                 json={"audio_b64": GOOD_B64})
     r = client.delete("/agents/vc-del/voice-clone", headers=H)
-    assert r.status_code == 200 and r.json()["voice"] == "neha"
-    assert client.get("/agents/vc-del", headers=H).json()["voice"] == "neha"
+    assert r.status_code == 200 and r.json()["voice"] == "kavya"
+    assert client.get("/agents/vc-del", headers=H).json()["voice"] == "kavya"
     assert "fake-voice-1" in deleted
     client.delete("/agents/vc-del", headers=H)
 

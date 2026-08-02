@@ -203,9 +203,9 @@ def _sonuslabs_demo_agent() -> AgentConfig:
         agent_id="sonuslabs",
         name="SonusLabs",
         language="en-IN",
-        voice="neha",
+        voice="kavya",
         system_prompt=(
-            "You are Neha, the AI receptionist demo for SonusLabs — a voice-AI "
+            "You are Kavya, the AI receptionist demo for SonusLabs — a voice-AI "
             "platform that answers business phones in English, Hindi, Telugu, "
             "Kannada, Tamil and more. RULES, in order: "
             "(1) ANSWER the caller's question directly with real information "
@@ -220,7 +220,7 @@ def _sonuslabs_demo_agent() -> AgentConfig:
             "chance to show off: answer them briefly and correctly, then you "
             "may steer back to SonusLabs. "
             "(5) If asked who you are, reply with EXACTLY this one sentence "
-            "and stop: 'I'm Neha, the SonusLabs AI receptionist demo.' "
+            "and stop: 'I'm Kavya, the SonusLabs AI receptionist demo.' "
             "About SonusLabs: an AI receptionist that answers business calls "
             "24/7, books appointments, answers customer questions, switches "
             "languages mid-call, and can even speak in the owner's own cloned "
@@ -229,7 +229,7 @@ def _sonuslabs_demo_agent() -> AgentConfig:
             "something, say so plainly and suggest sonuslabs.ai."
         ),
         greeting_text=(
-            "Hi! I'm Neha from SonusLabs — your AI receptionist demo. "
+            "Hi! I'm Kavya from SonusLabs — your AI receptionist demo. "
             "Ask me anything, in any language!"
         ),
         # Live web answers: "do some research on X" / news / prices trigger a
@@ -1525,11 +1525,11 @@ async def agent_voice_clone_delete(agent_id: str, request: Request):
                             status_code=404)
     vid = agent.voice.split(":", 1)[1]
     merged = agent.to_dict()
-    merged["voice"] = "neha"                 # sensible stock default
+    merged["voice"] = "kavya"                # sensible stock default
     await _agent_manager.update(AgentConfig.from_dict(merged))
     await _inworld_delete_voice(vid)         # best-effort; agent already reverted
     logger.info("clone.agent_deleted", agent=agent_id, voice_id=vid)
-    return {"voice": "neha", "deleted": vid}
+    return {"voice": "kavya", "deleted": vid}
 
 
 # ─── Website widget: the drop-in embed script clients put on their site ───
@@ -1839,12 +1839,12 @@ async def web_call(websocket: WebSocket):
                                    "I'm your SonusLabs receptionist demo. "
                                    "Ask me anything, in any language!"),
                     system_prompt=agent.system_prompt.replace(
-                        "You are Neha, the AI receptionist demo",
+                        "You are Kavya, the AI receptionist demo",
                         "You are an AI receptionist demo speaking in the "
                         "caller's own cloned voice — never call yourself Neha",
                     ).replace(
                         "(5) If asked who you are, reply with EXACTLY this "
-                        "one sentence and stop: 'I'm Neha, the SonusLabs AI "
+                        "one sentence and stop: 'I'm Kavya, the SonusLabs AI "
                         "receptionist demo.' ",
                         "(5) If asked who you are, reply with EXACTLY this "
                         "one sentence and stop: 'I'm your own voice, cloned "
@@ -1852,12 +1852,12 @@ async def web_call(websocket: WebSocket):
                         "your business calls sounding just like this.' ",
                     ),
                 )
-            elif call_voice and call_voice != "neha":
+            elif call_voice and call_voice != "kavya":
                 v = call_voice.capitalize()
                 agent = dataclasses.replace(
                     agent,
-                    greeting_text=agent.greeting_text.replace("Neha", v),
-                    system_prompt=agent.system_prompt.replace("Neha", v),
+                    greeting_text=agent.greeting_text.replace("Kavya", v),
+                    system_prompt=agent.system_prompt.replace("Kavya", v),
                 )
 
         # Coalesce 20ms frames into 80ms batches: 50 tiny buffers/sec made the
