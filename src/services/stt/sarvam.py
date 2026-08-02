@@ -56,6 +56,7 @@ class SarvamSTTClient:
         # Smaller buffer -> faster VAD/barge-in signals, more websocket traffic.
         self._buffer_bytes = max(1, int(16000 * 2 * buffer_ms / 1000))
         self._seen_unhandled: set[str] = set()
+        self._empty_finals = 0            # Sarvam finals that carried no text
         # True once audio has been sent that no final transcript covers yet —
         # the only time a flush is meaningful.
         self._audio_since_final = False
@@ -176,6 +177,15 @@ class SarvamSTTClient:
             if evt.text.strip():
                 self._audio_since_final = False   # this final covers sent audio
                 await self._transcript_queue.put(evt)
+            else:
+                # Sarvam heard audio but transcribed NOTHING — the fingerprint
+                # of speech too quiet/noisy for its recogniser (a loud probe
+                # transcribes fine on the same socket). Logged because a
+                # silently-dropped empty final looks identical to "the server
+                # never answered", and that ambiguity has cost real debugging.
+                self._empty_finals += 1
+                logger.info("stt.empty_final", count=self._empty_finals,
+                            lang=data.get("language_code", ""))
 
         elif msg_type == "events":
             data = msg.get("data", {})

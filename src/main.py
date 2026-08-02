@@ -1956,6 +1956,13 @@ async def web_call(websocket: WebSocket):
         loud_run = quiet_run = 0
         vad_active = False
         THRESH = 500                     # browser-AEC'd mic: fixed floor works
+        # Mic telemetry. "The agent never answered" has two very different
+        # causes — no audio arriving vs audio arriving too QUIET to cross the
+        # VAD floor — and they are indistinguishable without this. Costs
+        # nothing: rms() is already computed for the VAD below.
+        mic_frames = mic_loud = 0
+        mic_peak = 0
+        mic_log_at = time.monotonic() + 3.0
         while True:
             msg = await websocket.receive()
             if msg.get("type") == "websocket.disconnect":
@@ -1968,12 +1975,19 @@ async def web_call(websocket: WebSocket):
             buf += data
             while len(buf) >= FRAME16:
                 frame, buf = buf[:FRAME16], buf[FRAME16:]
-                if audioop.rms(frame, 2) > THRESH:
+                rms = audioop.rms(frame, 2)
+                mic_frames += 1
+                if rms > mic_peak:
+                    mic_peak = rms
+                if rms > THRESH:
+                    mic_loud += 1
                     loud_run += 1
                     quiet_run = 0
                 else:
                     quiet_run += 1
                     loud_run = 0
+                # VAD + early-endpoint flush — PER FRAME (this must stay inside
+                # the loop; hoisting it out silently kills barge-in and flush).
                 if not vad_active and loud_run >= 2:
                     vad_active = True
                     stt.inject_vad(True)
@@ -1982,6 +1996,16 @@ async def web_call(websocket: WebSocket):
                 elif vad_active and quiet_run >= 30:
                     vad_active = False
                     stt.inject_vad(False)
+            # Mic telemetry, throttled to ~1/3s. Separate from the VAD above so
+            # "the agent never answered" can be split into no-audio vs
+            # too-quiet-to-transcribe without a client-side repro.
+            if time.monotonic() >= mic_log_at:
+                mic_log_at = time.monotonic() + 3.0
+                logger.info("webcall.mic", frames=mic_frames, peak_rms=mic_peak,
+                            loud_frames=mic_loud, threshold=THRESH,
+                            verdict=("silent" if mic_peak < 100 else
+                                     "too_quiet" if mic_loud == 0 else "ok"))
+                mic_frames = mic_loud = mic_peak = 0
             await stt.send_audio(data)
     except WebSocketDisconnect:
         pass
