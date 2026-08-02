@@ -15,12 +15,38 @@ import { api } from "./api";
 export type CallStatus = "idle" | "connecting" | "live";
 export interface Caption { role: "user" | "assistant"; text: string }
 
+// Dead-microphone detection. Some Windows/Chrome driver combinations hand the
+// page a stream that is DIGITALLY SILENT (every sample 0) when the processing
+// constraints below are requested — the call looks perfect, frames flow at the
+// right rate, and the agent simply never hears anything. Seen in production:
+// server-side telemetry read peak_rms=2 for a whole call while a synthesized
+// probe on the same server read 6715.
+//
+// A quiet room still carries ambient energy, so the bar is set at true digital
+// silence rather than "quiet" — that keeps a user who simply hasn't spoken yet
+// from being told their mic is broken.
+const MIC_DEAD_PEAK = 0.001;      // ~32/32768 — below this nothing is arriving
+const MIC_CHECK_MS = 6000;        // give the user time to actually say something
+
+const MIC_PROCESSED: MediaTrackConstraints = {
+  echoCancellation: true, noiseSuppression: true, autoGainControl: true,
+};
+// The fallback: identical capture with all browser DSP off. This is what
+// recovers the silent-driver case, at the cost of no echo cancellation.
+const MIC_RAW: MediaTrackConstraints = {
+  echoCancellation: false, noiseSuppression: false, autoGainControl: false,
+};
+
 export function useWebCall() {
   const [status, setStatus] = useState<CallStatus>("idle");
   const [captions, setCaptions] = useState<Caption[]>([]);
   const [remaining, setRemaining] = useState<number | null>(null); // seconds left, null = uncapped
   const [endedReason, setEndedReason] =
     useState<"time_limit" | "no_credits" | "credits_exhausted" | null>(null);
+  // "silent" = the browser handed us a stream carrying no audio at all, even
+  // after retrying without DSP. Surfaced so the caller sees a real reason
+  // instead of an agent that never responds.
+  const [micIssue, setMicIssue] = useState<"silent" | null>(null);
   // hot-path outputs — read these in rAF loops, never via React state
   const levelRef = useRef(0);
   const speakingRef = useRef<"agent" | "user" | null>(null);
@@ -30,10 +56,12 @@ export function useWebCall() {
   const stream = useRef<MediaStream | null>(null);
   const proc = useRef<ScriptProcessorNode | null>(null);
   const ticker = useRef<ReturnType<typeof setInterval> | null>(null);
+  const watchdog = useRef<number | null>(null);
 
   const stop = useCallback(() => {
     const sock = ws.current; ws.current = null;
     if (sock && sock.readyState <= 1) sock.close();
+    if (watchdog.current) { clearTimeout(watchdog.current); watchdog.current = null; }
     proc.current?.disconnect(); proc.current = null;
     stream.current?.getTracks().forEach((t) => t.stop()); stream.current = null;
     ctx.current?.close().catch(() => {}); ctx.current = null;
@@ -46,11 +74,10 @@ export function useWebCall() {
   const start = useCallback(async (agentId: string, voice?: string, pace?: number) => {
     if (ws.current) { stop(); return; }
     setStatus("connecting"); setCaptions([]); setEndedReason(null); setRemaining(null);
+    setMicIssue(null);
     let ms: MediaStream;
     try {
-      ms = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      });
+      ms = await navigator.mediaDevices.getUserMedia({ audio: MIC_PROCESSED });
     } catch {
       setStatus("idle");
       throw new Error("microphone permission denied");
@@ -120,10 +147,11 @@ export function useWebCall() {
     };
 
     // uplink: mic -> 16k PCM16 — NO state updates in here
-    const source = audioCtx.createMediaStreamSource(ms);
+    let source = audioCtx.createMediaStreamSource(ms);
     const node = audioCtx.createScriptProcessor(4096, 1, 1);
     proc.current = node;
     const ratio = audioCtx.sampleRate / 16000;
+    let micPeak = 0;                  // loudest sample seen on the CURRENT mic
     node.onaudioprocess = (ev) => {
       if (socket.readyState !== 1) return;
       const inp = ev.inputBuffer.getChannelData(0);
@@ -139,12 +167,41 @@ export function useWebCall() {
         const av = v < 0 ? -v : v; if (av > peak) peak = av;
       }
       socket.send(out.buffer);
+      if (peak > micPeak) micPeak = peak;      // one compare; hot path stays clean
       if (peak > 0.06) { levelRef.current = peak; speakingRef.current = "user"; }
     };
     source.connect(node);
     const mute = audioCtx.createGain(); mute.gain.value = 0; // keep node alive, no echo
     node.connect(mute); mute.connect(audioCtx.destination);
+
+    // Dead-mic watchdog. If the stream carried literally nothing, retry ONCE
+    // with the browser's DSP disabled (the known silent-driver workaround),
+    // then give up and tell the caller rather than failing mutely forever.
+    const swapToRawMic = async () => {
+      try {
+        const raw = await navigator.mediaDevices.getUserMedia({ audio: MIC_RAW });
+        ms.getTracks().forEach((t) => t.stop());
+        stream.current = raw;
+        source.disconnect();
+        source = audioCtx.createMediaStreamSource(raw);
+        source.connect(node);
+        micPeak = 0;                            // judge the new mic on its own
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const micWatchdog = window.setTimeout(async () => {
+      if (!ws.current || micPeak >= MIC_DEAD_PEAK) return;   // audio is fine
+      const swapped = await swapToRawMic();
+      window.setTimeout(() => {
+        if (!ws.current) return;
+        if (!swapped || micPeak < MIC_DEAD_PEAK) setMicIssue("silent");
+      }, MIC_CHECK_MS);
+    }, MIC_CHECK_MS);
+    watchdog.current = micWatchdog;
   }, [stop]);
 
-  return { status, captions, levelRef, speakingRef, remaining, endedReason, start, stop };
+  return { status, captions, levelRef, speakingRef, remaining, endedReason,
+           micIssue, start, stop };
 }

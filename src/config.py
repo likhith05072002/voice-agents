@@ -38,7 +38,7 @@ class Settings(BaseSettings):
 
     # Sarvam LLM
     sarvam_llm_base_url: str = "https://api.sarvam.ai/v1"
-    sarvam_llm_model: str = "sarvam-30b"
+    sarvam_llm_model: str = "sarvam-105b"
     # CRITICAL: None disables reasoning mode. With reasoning, TTFT is 8s+. Without, TTFT is ~340ms.
     sarvam_llm_reasoning_effort: str | None = None
 

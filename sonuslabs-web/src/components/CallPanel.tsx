@@ -13,7 +13,7 @@ import { CLONE_SECONDS, MIN_CLONE_SECONDS, READ_SCRIPT,
 export const CallPanel = memo(function CallPanel({ agentId, subtitle, orbSize = 210, voicePicker, forceVoice, forcePace }:
   { agentId: string; subtitle?: string; orbSize?: number; voicePicker?: boolean;
     forceVoice?: string; forcePace?: number }) {
-  const { status, captions, levelRef, remaining, endedReason, start, stop } = useWebCall();
+  const { status, captions, levelRef, remaining, endedReason, micIssue, start, stop } = useWebCall();
   const capRef = useRef<HTMLDivElement | null>(null);
   const [voices, setVoices] = useState<string[]>([]);
   const [voice, setVoice] = useState<string>("");      // "" = agent default
@@ -195,6 +195,18 @@ export const CallPanel = memo(function CallPanel({ agentId, subtitle, orbSize = 
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {micIssue === "silent" && status === "live" && (
+        <div style={{ textAlign: "center", background: "#FBE8E2", border: "1px solid #F1C9BD",
+          color: "#B24A2E", borderRadius: 10, padding: "9px 12px", fontSize: 12.5,
+          fontWeight: 600, margin: "0 2px 10px", lineHeight: 1.5 }}>
+          🎙 We can't hear your microphone — it's connected but sending no sound.<br />
+          <span style={{ fontWeight: 500 }}>
+            Close any app using it (Zoom, Teams, Meet), check the mic isn't muted,
+            then reload and try again.
+          </span>
         </div>
       )}
 

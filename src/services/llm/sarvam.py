@@ -92,7 +92,7 @@ class SarvamLLMClient:
         self,
         api_key: str,
         base_url: str = "https://api.sarvam.ai/v1",
-        model: str = "sarvam-30b",
+        model: str = "sarvam-105b",
         reasoning_effort: str | None = None,
         max_tokens: int = 256,
         temperature: float = 0.3,

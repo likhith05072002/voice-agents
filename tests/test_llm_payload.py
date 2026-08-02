@@ -16,7 +16,7 @@ def test_reasoning_disabled_by_default():
     p = c._payload([{"role": "user", "content": "hi"}])
     assert "reasoning_effort" in p           # key MUST be present
     assert p["reasoning_effort"] is None     # None -> JSON null -> reasoning OFF
-    assert p["model"] == "sarvam-30b"
+    assert p["model"] == "sarvam-105b"
     assert p["stream"] is True
 
 

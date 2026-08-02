@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Microphone test</title>
+<style>
+  body{font-family:system-ui,sans-serif;background:#FAF7F0;color:#211C15;
+       max-width:640px;margin:0 auto;padding:28px}
+  h1{font-size:22px;margin-bottom:4px}
+  p{color:#6b6355;font-size:14px;line-height:1.5}
+  button{background:#E08A1E;color:#fff;border:none;border-radius:11px;
+         padding:13px 22px;font-size:15px;font-weight:700;cursor:pointer;margin:14px 0}
+  .bar{height:26px;background:#EFE9DC;border-radius:8px;overflow:hidden;margin:10px 0}
+  .fill{height:100%;width:0;background:linear-gradient(90deg,#7BC89B,#E08A1E);transition:width .05s}
+  .row{display:flex;justify-content:space-between;font-size:13px;color:#6b6355;margin-top:4px}
+  pre{background:#211C15;color:#E8E0D0;padding:12px;border-radius:10px;
+      font-size:12px;overflow:auto;white-space:pre-wrap;margin-top:16px}
+  .verdict{font-weight:700;font-size:15px;padding:12px;border-radius:10px;margin-top:14px}
+  .ok{background:#E4F3E9;color:#1F6B3F}
+  .bad{background:#FBE8E2;color:#B24A2E}
+</style>
+</head>
+<body>
+  <h1>Microphone test</h1>
+  <p>This page uses <b>only</b> the browser's raw microphone API — no SonusLabs
+     code, no WebSocket, no server. If the bar stays flat here while you talk,
+     the browser is not receiving audio from your microphone at all.</p>
+
+  <button id="go">Start microphone test</button>
+  <div class="bar"><div class="fill" id="fill"></div></div>
+  <div class="row"><span id="live">level: —</span><span id="peak">peak: —</span></div>
+  <div id="verdict"></div>
+  <pre id="log">ready.</pre>
+
+<script>
+const $ = id => document.getElementById(id);
+const log = m => { $('log').textContent += "\n" + m; };
+
+$('go').onclick = async () => {
+  $('go').disabled = true;
+  $('verdict').className = ''; $('verdict').textContent = '';
+  let maxPeak = 0;
+
+  // Deliberately NO constraints — the most permissive possible request.
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    log("getUserMedia FAILED: " + e.name + " — " + e.message);
+    $('verdict').className = 'verdict bad';
+    $('verdict').textContent = "Browser refused microphone access: " + e.name;
+    $('go').disabled = false; return;
+  }
+
+  const track = stream.getAudioTracks()[0];
+  log("track: " + track.label);
+  log("state: " + track.readyState + " | muted(OS): " + track.muted +
+      " | enabled: " + track.enabled);
+  try { log("settings: " + JSON.stringify(track.getSettings())); } catch {}
+
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  log("inputs detected: " + devices.filter(d => d.kind === 'audioinput')
+        .map(d => d.label || '(unlabelled)').join(' | '));
+
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  log("audioContext.state: " + ctx.state + " @ " + ctx.sampleRate + "Hz");
+  if (ctx.state === 'suspended') { await ctx.resume(); log("resumed -> " + ctx.state); }
+
+  const an = ctx.createAnalyser();
+  an.fftSize = 2048;
+  ctx.createMediaStreamSource(stream).connect(an);
+  const buf = new Float32Array(an.fftSize);
+
+  const t0 = performance.now();
+  (function tick(){
+    an.getFloatTimeDomainData(buf);
+    let peak = 0;
+    for (let i = 0; i < buf.length; i++) { const a = Math.abs(buf[i]); if (a > peak) peak = a; }
+    if (peak > maxPeak) maxPeak = peak;
+    $('fill').style.width = Math.min(100, peak * 300) + "%";
+    $('live').textContent = "level: " + peak.toFixed(5);
+    $('peak').textContent = "peak so far: " + maxPeak.toFixed(5);
+
+    const elapsed = performance.now() - t0;
+    if (elapsed < 12000) return requestAnimationFrame(tick);
+
+    if (maxPeak < 0.001) {
+      $('verdict').className = 'verdict bad';
+      $('verdict').textContent = "SILENT — the browser received no audio (peak "
+        + maxPeak.toFixed(5) + "). The microphone is not reaching Chrome.";
+      log("RESULT: silent stream. Not a SonusLabs issue — the raw browser API got nothing.");
+    } else {
+      $('verdict').className = 'verdict ok';
+      $('verdict').textContent = "WORKING — audio detected (peak "
+        + maxPeak.toFixed(3) + "). The microphone reaches the browser fine.";
+      log("RESULT: audio present. If the demo still fails, the bug is in SonusLabs.");
+    }
+    stream.getTracks().forEach(t => t.stop());
+    $('go').disabled = false;
+  })();
+};
+</script>
+</body>
+</html>

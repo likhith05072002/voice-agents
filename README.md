@@ -160,7 +160,7 @@ All settings load from `.env` (see `.env.example`). Notable knobs:
 | `BARGEIN_ENABLE_RECOVERY` | `true` | Pause-then-resume for backchannels/noise |
 | `ENABLE_SMART_ENDPOINTING` | `false` | Hold an unfinished final and merge with the next (needs live A/B before enabling) |
 | `ENDPOINTING_CONTINUATION_MS` | `600` | How long to wait for the continuation before firing the buffered fragment |
-| `SARVAM_LLM_MODEL` | `sarvam-30b` | Chat model (sarvam-m is deprecated) |
+| `SARVAM_LLM_MODEL` | `sarvam-105b` | Chat model (sarvam-m and sarvam-30b are deprecated) |
 | `SARVAM_LLM_REASONING_EFFORT` | `null` (off) | `null` disables thinking (~340 ms TTFT); `low`/`medium`/`high` enable it (slower) |
 | `EAGERNESS` | `balanced` | One dial for barge-in/endpointing: `cautious`/`balanced`/`eager` |
 | `ENABLE_LANGUAGE_SWITCH` | `true` | TTS voice language follows the caller's language |
