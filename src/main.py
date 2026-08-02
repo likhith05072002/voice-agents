@@ -1701,7 +1701,7 @@ async def web_call(websocket: WebSocket):
         await websocket.close(code=1013)
         return
 
-    stt = llm = tts = engine = engine_task = cap_task = None
+    stt = llm = tts = engine = engine_task = cap_task = recorder = None
     billed_ws = None                     # workspace to bill on teardown
     call_t0 = None
     try:
@@ -1882,9 +1882,25 @@ async def web_call(websocket: WebSocket):
                 _batch.clear()
                 await websocket.send_bytes(out)
 
+        # Record browser calls too. Only phone calls used to be persisted, so
+        # every website/widget conversation vanished the moment it ended —
+        # invisible in Call logs and in /admin. "from" is the caller's IP
+        # since there is no phone number on this leg.
+        recorder = CallRecorder(
+            call_id=f"web-{secrets.token_hex(6)}",
+            agent_id=agent.agent_id,
+            from_number=(websocket.client.host if websocket.client else "web"),
+            to_number="web",
+            started_at=time.time(), clock=time.monotonic,
+        )
+        if agent.workspace_id:
+            recorder.record.metadata["workspace_id"] = agent.workspace_id
+        recorder.record.metadata["channel"] = "web"
+
         def transcript_sink(role: str, text: str) -> None:
             logger.info("transcript", agent=agent.agent_id, role=role,
                         text=_safe_text(text, 200))
+            recorder.transcript(role, text)
             payload = json.dumps({"role": role, "text": text})
             asyncio.ensure_future(websocket.send_text(payload))
 
@@ -2051,6 +2067,15 @@ async def web_call(websocket: WebSocket):
                 await _billing.charge_workspace_usage(
                     billed_ws, call_seconds,
                     ref=f"web:{agent.agent_id}:{int(time.time())}")
+        # Persist the conversation. Best-effort: a storage hiccup must never
+        # surface as a failed call to the caller, who has already hung up.
+        if recorder is not None and _call_store is not None:
+            try:
+                record = recorder.finalize(ended_at=time.time())
+                if record.turns:
+                    await _call_store.save(record)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("webcall.record_save_failed", error=str(e))
         _sessions.release()
         logger.info("webcall.ended")
 

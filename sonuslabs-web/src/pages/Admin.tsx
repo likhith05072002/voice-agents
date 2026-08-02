@@ -95,13 +95,17 @@ const thStyle: React.CSSProperties = { textAlign: "left", padding: "8px 10px", f
 const tdStyle: React.CSSProperties = { padding: "9px 10px", fontSize: 13,
   borderBottom: `1px solid ${C.darkLine}`, verticalAlign: "top" };
 
-function Table({ head, rows }: { head: string[]; rows: React.ReactNode[][] }) {
+function Table({ head, rows, onRowClick }: {
+  head: string[]; rows: React.ReactNode[][]; onRowClick?: (i: number) => void;
+}) {
   return (
     <div style={{ ...card, padding: 6, overflowX: "auto" }}>
       <table style={{ borderCollapse: "collapse", width: "100%" }}>
         <thead><tr>{head.map((h) => <th key={h} style={thStyle}>{h}</th>)}</tr></thead>
         <tbody>{rows.map((r, i) => (
-          <tr key={i}>{r.map((c, j) => <td key={j} style={tdStyle}>{c}</td>)}</tr>))}</tbody>
+          <tr key={i} onClick={onRowClick && (() => onRowClick(i))}
+              style={onRowClick ? { cursor: "pointer" } : undefined}>
+            {r.map((c, j) => <td key={j} style={tdStyle}>{c}</td>)}</tr>))}</tbody>
       </table>
       {rows.length === 0 && <div style={{ padding: 16, color: C.darkMuted, fontSize: 13 }}>Nothing yet.</div>}
     </div>
@@ -185,8 +189,22 @@ function UsersTab() {
 }
 
 /* ─── calls ─── */
+// Who was on the other end. We don't store a call DIRECTION, so show BOTH legs
+// rather than guess: on an inbound call `from` is the caller, on an outbound
+// one `to` is whoever we dialled, and picking one would print our own Telnyx
+// number half the time. A browser/widget call has no phone number on either
+// leg — the caller's IP is the only handle there is.
+function farEnd(c: AdminCall): string {
+  const from = (c.from_number || "").trim();
+  const to = (c.to_number || "").trim();
+  if (to === "web") return from ? `web · ${from}` : "web";
+  if (from && to) return `${from} → ${to}`;
+  return from || to || "—";
+}
+
 function CallsTab() {
   const [rows, setRows] = useState<AdminCall[]>([]);
+  const [open, setOpen] = useState<string | null>(null);
   useEffect(() => {
     let alive = true;
     const load = () => api.adminCalls().then((r) => { if (alive) setRows(r.calls); }).catch(() => {});
@@ -195,18 +213,72 @@ function CallsTab() {
     return () => { alive = false; clearInterval(iv); };
   }, []);
   return (
-    <Table head={["When", "Customer", "Workspace", "Agent", "Duration", "Turns", "Latency", "Outcome"]}
-      rows={rows.map((c) => [
-        <span style={{ whiteSpace: "nowrap", color: C.darkMuted }}>{when(c.started_at)}</span>,
-        <span style={{ fontSize: 12 }}>{c.owner_email || "—"}</span>,
-        c.workspace_name || <span style={{ color: C.darkMuted }}>platform</span>,
-        <span style={{ fontFamily: mono, fontSize: 12 }}>{c.agent_id}</span>,
-        c.duration_s != null ? `${Math.round(c.duration_s)}s` : "—",
-        c.turn_count != null ? String(c.turn_count) : "—",
-        c.avg_perceived_ms != null ? `${Math.round(c.avg_perceived_ms)}ms` : "—",
-        <span style={{ color: c.outcome === "completed" ? "#7BC89B" : C.darkMuted }}>
-          {c.outcome || "—"}</span>,
-      ])} />
+    <>
+      <div style={{ fontSize: 12.5, color: C.darkMuted, marginBottom: 10 }}>
+        Click any row to read the full transcript.
+      </div>
+      <Table head={["When", "Number / source", "Customer", "Agent", "Duration", "Turns", "Outcome"]}
+        onRowClick={(i) => setOpen(rows[i].call_id)}
+        rows={rows.map((c) => [
+          <span style={{ whiteSpace: "nowrap", color: C.darkMuted }}>{when(c.started_at)}</span>,
+          <span style={{ fontFamily: mono, fontSize: 12, color: C.accent }}>{farEnd(c)}</span>,
+          <span style={{ fontSize: 12 }}>{c.owner_email || <span style={{ color: C.darkMuted }}>platform</span>}</span>,
+          <span style={{ fontFamily: mono, fontSize: 12 }}>{c.agent_id}</span>,
+          c.duration_s != null ? `${Math.round(c.duration_s)}s` : "—",
+          c.turn_count != null ? String(c.turn_count) : "—",
+          <span style={{ color: c.outcome === "completed" ? "#7BC89B" : C.darkMuted }}>
+            {c.outcome || "—"}</span>,
+        ])} />
+      {open && <TranscriptModal callId={open} onClose={() => setOpen(null)} />}
+    </>
+  );
+}
+
+function TranscriptModal({ callId, onClose }: { callId: string; onClose: () => void }) {
+  const [d, setD] = useState<(AdminCall & { turns: { role: string; text: string }[] }) | null>(null);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    api.adminCallDetail(callId).then(setD).catch(() => setErr("Could not load this call."));
+  }, [callId]);
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)",
+      display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 20 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: C.dark,
+        border: `1px solid ${C.darkLine}`, borderRadius: 16, width: "min(760px, 96vw)",
+        maxHeight: "86vh", display: "flex", flexDirection: "column" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+          padding: "14px 18px", borderBottom: `1px solid ${C.darkLine}` }}>
+          <div>
+            <div style={{ fontWeight: 700 }}>{d ? farEnd(d) : "Call transcript"}</div>
+            <div style={{ fontSize: 12, color: C.darkMuted, fontFamily: mono }}>
+              {d ? [d.agent_id, d.workspace_name || "platform", when(d.started_at),
+                    d.duration_s != null ? `${Math.round(d.duration_s)}s` : null,
+                    d.avg_perceived_ms != null ? `${Math.round(d.avg_perceived_ms)}ms` : null,
+                   ].filter(Boolean).join(" · ")
+                 : callId}
+            </div>
+          </div>
+          <span onClick={onClose} style={{ cursor: "pointer", color: C.darkMuted, fontSize: 20 }}>✕</span>
+        </div>
+        <div style={{ overflowY: "auto", padding: "16px 18px", display: "flex",
+          flexDirection: "column", gap: 9 }}>
+          {err && <div style={{ color: C.red }}>{err}</div>}
+          {!d && !err && <div style={{ color: C.darkMuted }}>Loading…</div>}
+          {d && d.turns.length === 0 && (
+            <div style={{ color: C.darkMuted }}>No transcript recorded for this call.</div>
+          )}
+          {d?.turns.map((t, i) => (
+            <div key={i} style={{ maxWidth: "84%", padding: "9px 13px", borderRadius: 13,
+              fontSize: 13.5, lineHeight: 1.45, whiteSpace: "pre-wrap",
+              ...(t.role === "user"
+                ? { alignSelf: "flex-end", background: C.accent, color: C.ink, fontWeight: 500 }
+                : { alignSelf: "flex-start", background: "#1E1A14", border: `1px solid ${C.darkLine}` }) }}>
+              {t.text}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 

@@ -8,6 +8,7 @@ SQL until there's a policy for them.
 
 from __future__ import annotations
 
+import json
 import time
 
 from fastapi import APIRouter, Request
@@ -105,6 +106,41 @@ async def calls(request: Request, limit: int = 100):
            LEFT JOIN users u ON u.id = ws.owner_user_id
            ORDER BY c.started_at DESC NULLS LAST LIMIT $1""", min(limit, 500))
     return {"calls": [dict(r) for r in rows]}
+
+
+@router.get("/admin/calls/{call_id}")
+async def call_detail(call_id: str, request: Request):
+    """One call in full, including the transcript.
+
+    Kept out of /admin/calls: transcripts are the bulk of a call row, and
+    shipping every one of them on a 500-row list page is wasteful when the
+    operator reads a handful."""
+    _, err = await _admin_or_404(request)
+    if err:
+        return err
+    row = await pool().fetchrow(
+        """SELECT c.*, ws.name AS workspace_name, u.email AS owner_email
+           FROM calls c
+           LEFT JOIN workspaces ws ON ws.id = c.workspace_id
+           LEFT JOIN users u ON u.id = ws.owner_user_id
+           WHERE c.call_id = $1""", call_id)
+    if row is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    d = dict(row)
+    # `turns` is stored as JSON text; hand the UI a real array so it does not
+    # have to know the storage format.
+    raw = d.get("turns")
+    if isinstance(raw, str):
+        try:
+            d["turns"] = json.loads(raw or "[]")
+        except json.JSONDecodeError:
+            d["turns"] = []
+    elif raw is None:
+        d["turns"] = []
+    for k, v in list(d.items()):          # uuid/datetime -> JSON-safe
+        if not isinstance(v, (str, int, float, bool, list, dict, type(None))):
+            d[k] = str(v)
+    return d
 
 
 @router.get("/admin/numbers")

@@ -182,6 +182,9 @@ export const api = {
   adminOverview: () => j<AdminOverview>("/admin/overview"),
   adminUsers: () => j<{ users: AdminUser[] }>("/admin/users"),
   adminCalls: () => j<{ calls: AdminCall[] }>("/admin/calls"),
+  adminCallDetail: (callId: string) =>
+    j<AdminCall & { turns: { role: string; text: string; t?: number }[] }>(
+      `/admin/calls/${encodeURIComponent(callId)}`),
   adminLedger: () => j<{ ledger: AdminLedgerRow[] }>("/admin/ledger"),
   adminLive: (since: number) =>
     j<{ active: number; lines: (LiveLine & { agent_id?: string })[] }>(
