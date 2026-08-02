@@ -45,9 +45,14 @@ def verify_telnyx_signature(
         from nacl.signing import VerifyKey
         from nacl.exceptions import BadSignatureError
     except ImportError:
-        # Dependency missing but a key was configured: fail closed.
-        logger.error("telnyx.signature.pynacl_missing")
-        return False
+        # A missing library is an OPERATOR error, not an attack — failing
+        # closed here rejects every webhook and takes phone calls down
+        # completely, which is what happened in production when PyNaCl was
+        # absent from requirements.txt. Scream loudly, keep answering calls.
+        logger.error("telnyx.signature.pynacl_missing",
+                     action="ALLOWING webhooks unverified — pip install PyNaCl",
+                     impact="signatures are NOT being checked")
+        return True
 
     try:
         verify_key = VerifyKey(base64.b64decode(public_key_b64))

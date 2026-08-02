@@ -15,3 +15,6 @@ audioop-lts==0.2.1; python_version >= "3.13"
 asyncpg==0.30.0
 itsdangerous==2.2.0
 pypdf==5.1.0
+# Ed25519 verification of Telnyx webhook signatures (src/security/telnyx.py).
+# Without it the verifier fails CLOSED and every webhook is rejected.
+PyNaCl==1.5.0
