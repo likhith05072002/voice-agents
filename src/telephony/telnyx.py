@@ -42,7 +42,12 @@ class TelnyxClient:
 
     async def streaming_start(self, call_control_id: str, *, stream_url: str,
                               track: str = "inbound_track", codec: str = "PCMU") -> None:
-        await self._post(
+        """Ask Telnyx to open the media WebSocket back to us.
+
+        The response IS checked: a rejected streaming_start used to fail
+        silently, and the caller hears a perfectly connected call with total
+        silence — the hardest possible symptom to diagnose. Log it loudly."""
+        resp = await self._post(
             f"/calls/{call_control_id}/actions/streaming_start",
             {
                 "stream_url": stream_url,
@@ -51,6 +56,12 @@ class TelnyxClient:
                 "stream_bidirectional_codec": codec,
             },
         )
+        if resp.status_code >= 300:
+            logger.error("telnyx.streaming_start_failed",
+                         status=resp.status_code, url=stream_url,
+                         body=resp.text[:300])
+            raise RuntimeError(f"streaming_start failed: {resp.status_code}")
+        logger.info("telnyx.streaming_started", url=stream_url)
 
     async def transfer(self, call_control_id: str, *, to: str, from_: str = "") -> None:
         """Transfer the live call to another number (human handoff). The PSTN

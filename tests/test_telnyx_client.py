@@ -68,3 +68,15 @@ async def test_hangup_path():
     tc = TelnyxClient("k", client=_client(handler))
     await tc.hangup("cc9")
     assert seen[0].endswith("/calls/cc9/actions/hangup")
+
+
+async def test_streaming_start_raises_on_rejection():
+    """A rejected streaming_start must NOT pass silently: the call connects
+    and the caller hears pure silence, which is the hardest symptom to
+    diagnose (cost a live debugging session). Fail loudly instead."""
+    def handler(request):
+        return httpx.Response(422, json={"errors": [{"detail": "bad stream_url"}]})
+
+    tc = TelnyxClient("key", client=_client(handler))
+    with pytest.raises(RuntimeError, match="streaming_start failed: 422"):
+        await tc.streaming_start("cc-1", stream_url="wss://example.test/media-stream")

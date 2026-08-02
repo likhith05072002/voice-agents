@@ -1181,6 +1181,12 @@ async def telnyx_webhook(request: Request):
     et = body.get("data", {}).get("event_type", "")
     p = body.get("data", {}).get("payload", {})
     ccid = p.get("call_control_id", "")
+    # Log EVERY event: without this a silent call is undiagnosable — you
+    # cannot tell "the callee never answered" from "answered but media never
+    # started", which are completely different bugs.
+    logger.info("telnyx.webhook", event=et, direction=p.get("direction", ""),
+                cause=p.get("hangup_cause", ""), source=p.get("hangup_source", ""),
+                call=ccid[-12:])
 
     if et == "call.initiated":
         # INBOUND only: route the dialed number to a business and answer.
@@ -1225,7 +1231,17 @@ async def telnyx_webhook(request: Request):
     elif et == "call.answered":
         _test_event(ccid, "📞 answered — starting media")
         url = settings.public_url.replace("https://", "wss://") + "/media-stream"
-        await _telnyx.streaming_start(ccid, stream_url=url)
+        try:
+            await _telnyx.streaming_start(ccid, stream_url=url)
+        except Exception as e:  # noqa: BLE001
+            # Never 500 back to Telnyx (they retry and we'd double-stream);
+            # the loud log above is the diagnosis. Hang up rather than leave
+            # the caller listening to silence.
+            logger.error("call.media_start_failed", call=ccid[-12:], error=str(e))
+            try:
+                await _telnyx.hangup(ccid)
+            except Exception:  # noqa: BLE001
+                pass
     elif et == "call.hangup":
         _test_event(ccid, "📞 call hung up")
     return JSONResponse({"status": "ok"})

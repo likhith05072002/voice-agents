@@ -128,9 +128,13 @@ async def user_for_session(token: str) -> dict | None:
         return None
     seen = row["_seen"]
     if datetime.now(timezone.utc) - seen > timedelta(hours=SESSION_REFRESH_AFTER_H):
+        # asyncpg binds `interval` from a timedelta — a "30 days" STRING raises
+        # DataError and the exception propagated out of current_user(), so any
+        # session older than the refresh window broke the console (seen in prod).
         await pool().execute(
-            "UPDATE sessions SET last_seen_at = now(), expires_at = now() + $2::interval "
-            "WHERE token_hash = $1", row["token_hash"], f"{SESSION_TTL_DAYS} days")
+            "UPDATE sessions SET last_seen_at = now(), expires_at = now() + $2 "
+            "WHERE token_hash = $1", row["token_hash"],
+            timedelta(days=SESSION_TTL_DAYS))
     d = _u(row)
     d.pop("token_hash", None)
     d.pop("_seen", None)
