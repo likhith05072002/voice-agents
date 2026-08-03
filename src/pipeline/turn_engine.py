@@ -175,6 +175,23 @@ class _SpokenMark:
     text: str
 
 
+# Spoken when a turn produced NO output at all (LLM provider outage): dead
+# air reads as a dropped call, an apology keeps the caller on the line. TTS
+# survives these incidents (separate infrastructure), so the line is heard.
+_FAILURE_LINES = {
+    "hi": "माफ़ कीजिए, अभी थोड़ी तकनीकी दिक्कत हुई। कृपया फिर से बोलिए।",
+    "kn": "ಕ್ಷಮಿಸಿ, ಸ್ವಲ್ಪ ತಾಂತ್ರಿಕ ತೊಂದರೆ ಆಯಿತು. ದಯವಿಟ್ಟು ಮತ್ತೊಮ್ಮೆ ಹೇಳಿ.",
+    "te": "క్షమించండి, చిన్న సాంకేతిక సమస్య వచ్చింది. దయచేసి మళ్ళీ చెప్పండి.",
+    "ta": "மன்னிக்கவும், சிறு தொழில்நுட்பக் கோளாறு ஏற்பட்டது. மீண்டும் சொல்லுங்கள்.",
+    "en": "Sorry, I ran into a small technical issue just now. Could you say that again?",
+}
+
+
+def _failure_line(language: str) -> str:
+    return _FAILURE_LINES.get((language or "en").split("-")[0].lower(),
+                              _FAILURE_LINES["en"])
+
+
 class State(Enum):
     LISTENING = "listening"
     THINKING = "thinking"
@@ -334,6 +351,7 @@ class TurnEngine:
         self._pump_task = asyncio.create_task(self._playback_pump())
         if self.greeting_text:
             self._current_turn = asyncio.create_task(self._do_greeting())
+            self._current_turn.add_done_callback(self._on_turn_task_done)
         try:
             await self._event_loop()
         except asyncio.CancelledError:
@@ -658,6 +676,23 @@ class TurnEngine:
 
     def _start_turn(self, transcript: str) -> None:
         self._current_turn = asyncio.create_task(self._do_turn(transcript))
+        # A bare create_task swallows its exception: a crashed turn used to
+        # leave the caller in dead air with NOTHING in the log (the engine
+        # loop lives on, so it wasn't even a visible crash). Log it and
+        # restore a listening state so the next utterance works.
+        self._current_turn.add_done_callback(self._on_turn_task_done)
+
+    def _on_turn_task_done(self, task: asyncio.Task) -> None:
+        if task.cancelled():
+            return                      # barge-in teardown — expected
+        exc = task.exception()
+        if exc is None:
+            return
+        logger.error("turn.crashed", error=repr(exc),
+                     tb="".join(traceback.format_exception(exc)))
+        self._pump_gate.set()           # never leave audio paused
+        self._spoken = ""
+        self.state = State.LISTENING
 
     def _emit_transcript(self, role: str, text: str) -> None:
         """Push a finalized turn to the optional real-time transcript sink."""
@@ -1285,6 +1320,20 @@ class TurnEngine:
             full = await self._stream_answer(messages, tl, active_prompt)
 
         await self._finish_playback()
+        # Provider outage containment: the LLM produced NOTHING (dead backend,
+        # 2026-08-03 incident: connection accepted, zero bytes ever sent). The
+        # caller must not be ghosted — say so, in their language, and keep
+        # listening. Ephemeral: an apology is not part of the conversation.
+        if not full.strip() and not self._spoken.strip():
+            logger.error("turn.failed", reason="llm_no_output",
+                         user_text=_safe_text(transcript, 60))
+            try:
+                await self._speak(_failure_line(self._caller_language),
+                                  ephemeral=True)
+                await self._finish_playback()
+            except Exception:  # noqa: BLE001 — last resort; never crash here
+                logger.error("turn.failed_apology_error",
+                             tb=traceback.format_exc())
         await self._run_deferred_action()   # e.g. transfer, after audio played
         # History records what the caller HEARD (pump-confirmed marks), not what
         # the LLM generated: a failed tail synthesis means `full` contains

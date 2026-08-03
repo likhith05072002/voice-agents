@@ -116,10 +116,16 @@ class SarvamLLMClient:
         self._client: httpx.AsyncClient | None = None
         self._active: object | None = None   # per-call cancellation token
 
+    # A dead Sarvam backend accepts the TCP connection and then never sends a
+    # byte (2026-08-03 incident: 1/9 valid requests answered). Waiting the full
+    # read-timeout is 30s of dead air on a live call — give up early, retry once.
+    FIRST_LINE_TIMEOUT_S = 8.0
+
     @property
     def _http(self) -> httpx.AsyncClient:
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=30.0)
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(30.0, connect=5.0))
         return self._client
 
     async def warmup(self) -> None:
@@ -135,18 +141,22 @@ class SarvamLLMClient:
     def _payload(self, messages: list[dict]) -> dict:
         """Build the streaming chat-completions request body.
 
-        ``reasoning_effort`` is ALWAYS included: omitting it re-enables Sarvam's
-        default thinking mode and tanks TTFT to ~8s. ``None`` -> JSON ``null``
-        (reasoning disabled, lowest latency).
+        ``reasoning_effort`` is included ONLY when set to a string. Sending
+        JSON null used to disable thinking (their documented low-latency
+        mode) — since 2026-08-03 a null makes Sarvam's gateway HANG FOREVER
+        (validator now only accepts low/medium/high; A/B curl proven: null =
+        0 bytes in 35s, field omitted = 200 in 1.8s). NEVER send null.
         """
-        return {
+        body: dict = {
             "model": self.model,
             "messages": messages,
             "stream": True,
             "max_tokens": self.max_tokens,
-            "reasoning_effort": self.reasoning_effort,
             "temperature": self.temperature,
         }
+        if self.reasoning_effort:
+            body["reasoning_effort"] = self.reasoning_effort
+        return body
 
     def _complete_payload(self, messages: list[dict], tools: list[dict] | None = None) -> dict:
         """Non-streaming body, used for tool decisions and structured output."""
@@ -155,33 +165,43 @@ class SarvamLLMClient:
             "messages": messages,
             "stream": False,
             "max_tokens": self.max_tokens,
-            "reasoning_effort": self.reasoning_effort,
             "temperature": self.temperature,
         }
+        if self.reasoning_effort:
+            body["reasoning_effort"] = self.reasoning_effort
         if tools:
             body["tools"] = tools
         return body
 
     async def complete(self, messages: list[dict], tools: list[dict] | None = None):
-        """One non-streaming completion. Returns ``(content, tool_calls)``."""
-        try:
-            resp = await self._http.post(
-                f"{self.base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=self._complete_payload(messages, tools),
-            )
-            if resp.status_code != 200:
-                logger.error("llm.complete_http_error", status=resp.status_code,
-                             body=resp.text[:200])
-                return None, []
-            msg = resp.json()["choices"][0]["message"]
-            return msg.get("content"), msg.get("tool_calls") or []
-        except Exception as e:  # noqa: BLE001
-            logger.error("llm.complete_error", error=str(e))
-            return None, []
+        """One non-streaming completion. Returns ``(content, tool_calls)``.
+
+        Bounded + one retry: this sits on a live call's critical path, so a
+        hung backend must cost seconds, not the full read-timeout. A retry
+        usually lands on a different backend when the provider is flapping."""
+        for attempt in (1, 2):
+            try:
+                resp = await self._http.post(
+                    f"{self.base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=self._complete_payload(messages, tools),
+                    timeout=12.0,
+                )
+                if resp.status_code != 200:
+                    logger.error("llm.complete_http_error", status=resp.status_code,
+                                 body=resp.text[:200])
+                    return None, []
+                msg = resp.json()["choices"][0]["message"]
+                return msg.get("content"), msg.get("tool_calls") or []
+            except Exception as e:  # noqa: BLE001
+                if attempt == 1:
+                    logger.warning("llm.complete_retry", error=str(e))
+                    continue
+                logger.error("llm.complete_error", error=str(e))
+        return None, []
 
     async def complete_json(self, messages: list[dict]) -> dict:
         """Completion coerced to a JSON object (intent classification, slot
@@ -195,18 +215,51 @@ class SarvamLLMClient:
         sentence_queue: asyncio.Queue,
     ) -> str:
         """Stream LLM tokens, detect sentence boundaries, put SentenceEvents on queue.
-        Returns the full response text."""
+        Returns the full response text.
+
+        Retries ONCE, but only when the first attempt produced NOTHING — a
+        retry after sentences were already queued would speak the answer's
+        opening twice. During a flapping incident (backends accept the
+        connection, never send a byte) the retry frequently lands on a
+        healthy backend and saves the turn."""
         # Per-call cancellation token. A shared boolean reset at call entry can
         # REVIVE a previous, not-yet-dead stream (cancel A -> B starts -> flag
         # cleared -> A's loop resumes burning tokens). With a token, cancel()
         # kills the current stream and a new call supersedes any older one.
         token = object()
         self._active = token
+        full_response = ""
+        try:
+            for attempt in (1, 2):
+                full_response, emitted = await self._stream_once(
+                    messages, sentence_queue, token)
+                # `emitted` is the safety gate, not text length: only a turn
+                # where NOTHING reached the speaker may be retried.
+                if emitted or self._active is not token:
+                    break
+                if attempt == 1:
+                    logger.warning("llm.stream_retry")
+        finally:
+            # ALWAYS signal end of generation — an early `return` on HTTP error
+            # used to skip this and leave the consumer blocked forever (turn
+            # stuck in THINKING until the caller spoke again).
+            sentence_queue.put_nowait(None)
+        return full_response
+
+    async def _stream_once(
+        self,
+        messages: list[dict],
+        sentence_queue: asyncio.Queue,
+        token: object,
+    ) -> tuple[str, bool]:
+        """One streaming attempt. Returns (full_text, any_sentence_emitted).
+        Never raises; a failure returns partial text so the caller can decide
+        whether a retry is safe."""
         buffer = ""
         full_response = ""
         is_first = True
+        emitted = False
         start = time.perf_counter()
-
         try:
             async with self._http.stream(
                 "POST",
@@ -220,9 +273,28 @@ class SarvamLLMClient:
                 if resp.status_code != 200:
                     body = await resp.aread()
                     logger.error("llm.http_error", status=resp.status_code, body=body.decode()[:200])
-                    return ""
+                    return "", emitted
 
-                async for line in resp.aiter_lines():
+                # Watchdog: until the first line arrives, wait at most
+                # FIRST_LINE_TIMEOUT_S — a dead backend accepts the socket
+                # and sends nothing; the full read-timeout (30s) is a caller
+                # hanging up. After bytes flow, the normal timeout governs.
+                lines = resp.aiter_lines().__aiter__()
+                got_line = False
+                while True:
+                    try:
+                        if got_line:
+                            line = await lines.__anext__()
+                        else:
+                            line = await asyncio.wait_for(
+                                lines.__anext__(), self.FIRST_LINE_TIMEOUT_S)
+                            got_line = True
+                    except StopAsyncIteration:
+                        break
+                    except asyncio.TimeoutError:
+                        logger.warning("llm.first_line_timeout",
+                                       s=self.FIRST_LINE_TIMEOUT_S)
+                        return "", emitted
                     if self._active is not token:   # cancelled or superseded
                         break
                     if not line.startswith("data: "):
@@ -239,6 +311,8 @@ class SarvamLLMClient:
                     choices = chunk.get("choices", [])
                     if not choices:
                         continue
+                    # NOTE: thinking deltas arrive as `reasoning_content`;
+                    # only `content` is spoken.
                     content = choices[0].get("delta", {}).get("content")
                     if not content:
                         continue
@@ -255,6 +329,7 @@ class SarvamLLMClient:
                             timestamp=time.perf_counter(),
                         )
                         await sentence_queue.put(evt)
+                        emitted = True
                         if is_first:
                             logger.info("llm.first_sentence", ms=round((evt.timestamp - start) * 1000))
                         is_first = False
@@ -268,19 +343,17 @@ class SarvamLLMClient:
                     timestamp=time.perf_counter(),
                 )
                 await sentence_queue.put(evt)
+                emitted = True
 
             logger.info("llm.stream_done", chars=len(full_response),
                         tail_chars=len(buffer), cancelled=self._active is not token,
                         ms=round((time.perf_counter() - start) * 1000))
-
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error("llm.stream_error", error=str(e))
-        finally:
-            # ALWAYS signal end of generation — an early `return` on HTTP error
-            # used to skip this and leave the consumer blocked forever (turn
-            # stuck in THINKING until the caller spoke again).
-            sentence_queue.put_nowait(None)
-        return full_response
+            # Keep any partial text: those sentences were already SPOKEN, and
+            # history must record them (retry is blocked by emitted anyway).
+            return full_response, emitted
+        return full_response, emitted
 
     def cancel(self) -> None:
         self._active = None

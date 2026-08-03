@@ -1,9 +1,10 @@
 """Guards for the Sarvam LLM request payload.
 
-The single most important property: reasoning_effort must be sent as JSON null
-by default. Sarvam enables "thinking" by default; omitting the key (or sending a
-value) re-enables it and pushes first-token latency from ~340ms to ~8s. These
-tests lock that in so a future refactor can't silently regress TTFT.
+The single most important property FLIPPED on 2026-08-03: reasoning_effort
+used to be sent as JSON null to disable thinking (their documented
+low-latency mode) — then Sarvam's gateway started HANGING FOREVER on null
+(validator now accepts only low/medium/high), which took every call down.
+The key must now be OMITTED when unset, and never serialized as null.
 """
 
 import json
@@ -11,19 +12,18 @@ import json
 from src.services.llm.sarvam import SarvamLLMClient, extract_json
 
 
-def test_reasoning_disabled_by_default():
+def test_reasoning_effort_omitted_by_default():
     c = SarvamLLMClient("k")
     p = c._payload([{"role": "user", "content": "hi"}])
-    assert "reasoning_effort" in p           # key MUST be present
-    assert p["reasoning_effort"] is None     # None -> JSON null -> reasoning OFF
+    assert "reasoning_effort" not in p       # null = infinite hang since 2026-08-03
     assert p["model"] == "sarvam-105b"
     assert p["stream"] is True
 
 
-def test_null_actually_serializes_in_json_body():
-    # The wire format is what matters — assert literal `null`, not an omission.
+def test_null_never_reaches_the_wire():
+    # The wire format is what matters — the literal `null` is what hangs them.
     body = json.dumps(SarvamLLMClient("k")._payload([]))
-    assert '"reasoning_effort": null' in body
+    assert '"reasoning_effort": null' not in body
 
 
 def test_explicit_effort_and_model_are_respected():
@@ -39,7 +39,7 @@ def test_complete_payload_is_non_streaming_and_carries_tools():
     tools = [{"type": "function", "function": {"name": "t", "description": "", "parameters": {}}}]
     p = c._complete_payload([{"role": "user", "content": "hi"}], tools)
     assert p["stream"] is False
-    assert p["reasoning_effort"] is None        # still disabled for tool decisions
+    assert "reasoning_effort" not in p          # never null here either
     assert p["tools"] == tools
     # no tools -> key omitted
     assert "tools" not in c._complete_payload([])
