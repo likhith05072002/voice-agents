@@ -72,6 +72,15 @@ class Settings(BaseSettings):
 
     # OpenRouter (LLM fallback)
     openrouter_api_key: str = ""
+    # Call-path LLM provider. "auto" = OpenRouter when a key is present, else
+    # Sarvam. Forced to OpenRouter in practice since 2026-08-03: Sarvam
+    # silently force-enabled "thinking" on sarvam-105b (the null off-switch
+    # now hangs their gateway) — ~1000 tokens of deliberation per reply gave
+    # empty answers at voice-sized budgets and ~14s first-word latency at
+    # 2048. Measured 2026-08-04: Gemini 2.5 Flash via OpenRouter speaks in
+    # 1.0-1.6s across en/hi/kn with native-script replies.
+    llm_provider: str = "auto"          # auto | openrouter | sarvam
+    openrouter_llm_model: str = "google/gemini-2.5-flash"
 
     # OpenAI (LLM fallback)
     openai_api_key: str = ""

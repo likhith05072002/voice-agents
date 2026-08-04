@@ -152,6 +152,39 @@ def _accounts_on() -> bool:
     return bool(settings.database_url)
 
 
+def _build_llm(model: str | None = None, max_tokens: int = 256,
+               reasoning_effort: str | None = None) -> SarvamLLMClient:
+    """The LLM for calls and onboarding — provider chosen by config.
+
+    OpenRouter (Gemini Flash) took over from sarvam-105b on 2026-08-04:
+    Sarvam silently force-enabled thinking (see config.llm_provider), which
+    emptied or 14s-delayed every reply. The client class speaks plain
+    OpenAI-style chat completions, so one class drives both providers.
+
+    ``model`` is honoured only when it matches the provider's id format
+    (OpenRouter ids contain "/"): agents saved with model="sarvam-105b"
+    must not be sent verbatim to OpenRouter, and vice versa.
+    """
+    use_openrouter = settings.llm_provider == "openrouter" or (
+        settings.llm_provider == "auto" and bool(settings.openrouter_api_key))
+    if use_openrouter:
+        or_model = model if (model and "/" in model) else settings.openrouter_llm_model
+        return SarvamLLMClient(
+            settings.openrouter_api_key,
+            base_url="https://openrouter.ai/api/v1",
+            model=or_model,
+            max_tokens=max_tokens,
+        )
+    sv_model = model if (model and "/" not in model) else settings.sarvam_llm_model
+    return SarvamLLMClient(
+        settings.sarvam_api_key,
+        base_url=settings.sarvam_llm_base_url,
+        model=sv_model,
+        max_tokens=max_tokens,
+        reasoning_effort=reasoning_effort or settings.sarvam_llm_reasoning_effort,
+    )
+
+
 # Agents callable from the public landing orb WITHOUT a session (the demo).
 _PUBLIC_DEMO_AGENTS = {s.strip() for s in
                        (settings.public_demo_agents or "").split(",") if s.strip()}
@@ -415,8 +448,7 @@ async def onboard_research(request: Request):
     from src.onboarding import research_website
     # A full draft (persona fields + 8-12 facts) needs ~1k output tokens; the
     # default 256 truncated the JSON mid-object and the parse came back empty.
-    llm = SarvamLLMClient(settings.sarvam_api_key, model="sarvam-105b",
-                          max_tokens=1400)
+    llm = _build_llm(max_tokens=1400)
     try:
         draft = await research_website(
             url=url, description=(body.get("description") or "").strip(),
@@ -446,8 +478,7 @@ async def onboard_enhance(request: Request):
     if not desc:
         return JSONResponse({"error": "description required"}, status_code=400)
     from src.onboarding import enhance_prompt
-    llm = SarvamLLMClient(settings.sarvam_api_key, model="sarvam-105b",
-                          max_tokens=900)
+    llm = _build_llm(max_tokens=900)
     try:
         prompt = await enhance_prompt(
             description=desc, business_name=(body.get("business_name") or "").strip(),
@@ -1752,8 +1783,7 @@ async def web_call(websocket: WebSocket):
 
         stt = SarvamSTTClient(settings.sarvam_api_key, buffer_ms=100)
         await stt.connect(language=agent.language)
-        llm = SarvamLLMClient(settings.sarvam_api_key,
-                              model=agent.llm_model or settings.sarvam_llm_model)
+        llm = _build_llm(model=agent.llm_model)
         # Optional per-call voice + pace overrides (the console editor's talk
         # orb sends the LIVE, possibly-unsaved values so you hear exactly what
         # you see). Only sane values are honoured, else the agent's config wins.
@@ -2188,13 +2218,9 @@ async def media_stream(websocket: WebSocket):
             buffer_ms=settings.stt_buffer_ms,
             high_vad_sensitivity=eag.high_vad_sensitivity,
         )
-        llm = SarvamLLMClient(
-            settings.sarvam_api_key,
-            base_url=settings.sarvam_llm_base_url,
-            model=agent.llm_model or settings.sarvam_llm_model,
-            reasoning_effort=(agent.llm_reasoning_effort or None)
-                             if agent.llm_reasoning_effort
-                             else settings.sarvam_llm_reasoning_effort,
+        llm = _build_llm(
+            model=agent.llm_model,
+            reasoning_effort=agent.llm_reasoning_effort or None,
         )
         # Phone calls speak the agent's persistent clone too — same 8kHz PCM16
         # contract as Sarvam, so the engine's mulaw framing is untouched.
